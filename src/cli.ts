@@ -6,7 +6,7 @@ import { ImapCommandError, ProtocolError } from "./imap/client.ts";
 import { fetchMessage } from "./ops/fetch.ts";
 import { handledCheck } from "./ops/handled_check.ts";
 import { listNew } from "./ops/list_new.ts";
-import { saveDraft } from "./ops/save_draft.ts";
+import { saveDraft, validateDraftBody } from "./ops/save_draft.ts";
 import { FolderError } from "./folders.ts";
 import { SecretError, type SecretStore } from "./secrets.ts";
 import { openSession, OpError, parseUid } from "./session.ts";
@@ -91,7 +91,9 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
         if (p.pos.length !== 1) throw new OpError("usage", "handled-check requires exactly one UID");
         const uid = parseUid(p.pos[0]);
         const uv = p.flags.get("--uidvalidity");
-        if (uv !== undefined && !/^\d{1,10}$/.test(uv)) throw new OpError("usage", "invalid --uidvalidity");
+        if (uv !== undefined && (!/^[1-9]\d{0,9}$/.test(uv) || Number(uv) > 0xffffffff)) {
+          throw new OpError("usage", "invalid --uidvalidity");
+        }
         const s = await openSession(config, deps.secrets);
         try {
           result = await handledCheck(s, uid, {
@@ -114,6 +116,7 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
         } catch {
           throw new OpError("usage", "draft body must be valid UTF-8");
         }
+        validateDraftBody(body);
         const s = await openSession(config, deps.secrets);
         try {
           result = await saveDraft(s, uid, body);

@@ -1,5 +1,5 @@
 import PostalMime from "postal-mime";
-import { clean, validMessageId } from "../headers.ts";
+import { addr, clean, validMessageId } from "../headers.ts";
 import { contentMatchesExtension } from "../filetype.ts";
 import { sanitizeFilename } from "../sanitize.ts";
 import { OpError, type Session } from "../session.ts";
@@ -28,6 +28,12 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
 /** Writes a new file; a repeat fetch is idempotent if an identical regular file is already there. */
 async function writeOnce(path: string, bytes: Uint8Array): Promise<void> {
   try {
@@ -36,7 +42,7 @@ async function writeOnce(path: string, bytes: Uint8Array): Promise<void> {
     if (!(e instanceof Deno.errors.AlreadyExists)) throw e;
     const st = await Deno.lstat(path); // lstat: never follow a symlink planted at this name
     const same = st.isFile && st.size === bytes.length &&
-      (await Deno.readFile(path)).every((b, i) => b === bytes[i]);
+      sameBytes(await Deno.readFile(path), bytes);
     if (!same) throw new OpError("scratch_conflict", "a different file already exists at the target path");
   }
 }
@@ -92,6 +98,10 @@ export async function fetchMessage(s: Session, uid: number) {
     } else {
       if (!dirReady) {
         await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
+        // A pre-planted symlink here would redirect every write; refuse it.
+        if ((await Deno.lstat(dir)).isSymlink) {
+          throw new OpError("scratch_conflict", "message scratch directory is a symlink");
+        }
         dirReady = true;
       }
       const path = `${dir}/${i + 1}-${safe.name}`;
@@ -109,11 +119,9 @@ export async function fetchMessage(s: Session, uid: number) {
     uid,
     uidValidity: info.uidValidity,
     messageId: validMessageId(mid) ? mid : null,
-    from: email.from?.address
-      ? { name: clean(email.from.name, 120), address: clean(email.from.address, 254) }
-      : null,
+    from: addr(email.from),
     subject: clean(email.subject),
-    date: email.date ?? null,
+    date: email.date ? clean(email.date, 60) : null,
     body,
     bodySource,
     bodyTruncated: truncated,

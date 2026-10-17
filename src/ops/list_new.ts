@@ -13,7 +13,7 @@ export async function listNew(s: Session, afterUid: number) {
   const limit = s.config.limits.maxListed;
   // One cheap round trip for the UIDs themselves, then headers only for the ones we will return.
   // "n:*" always includes the highest message even when it is below n (RFC 3501), so filter.
-  const uids = (await s.client.uidSearch({ kind: "uid", set: `${afterUid + 1}:*` }))
+  const uids = [...new Set(await s.client.uidSearch({ kind: "uid", set: `${afterUid + 1}:*` }))]
     .filter((u) => u > afterUid)
     .sort((a, b) => a - b);
   const wanted = uids.slice(0, limit);

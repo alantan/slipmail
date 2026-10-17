@@ -4,9 +4,14 @@ import { OpError, type Session } from "../session.ts";
 
 const MAX_REFERENCES = 10;
 
-export async function saveDraft(s: Session, uid: number, body: string) {
+/** Cheap checks the CLI runs before opening a connection. */
+export function validateDraftBody(body: string): void {
   if (!body.trim()) throw new OpError("usage", "empty draft body");
   if (body.includes("\u0000")) throw new OpError("usage", "NUL in draft body");
+}
+
+export async function saveDraft(s: Session, uid: number, body: string) {
+  validateDraftBody(body);
 
   await s.client.examine(s.folders.inbox);
   const row = (await s.client.uidFetch(String(uid), { headerFields: HEADER_FIELDS })).find((r) =>

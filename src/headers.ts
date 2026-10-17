@@ -45,7 +45,7 @@ export function validMessageId(s: string | null | undefined): s is string {
   return !!s && MSGID.test(s);
 }
 
-function addr(a: { name?: string; address?: string } | undefined): Address | null {
+export function addr(a: { name?: string; address?: string } | undefined): Address | null {
   if (!a?.address) return null;
   return { name: clean(a.name, 120), address: clean(a.address, 254) };
 }
@@ -60,7 +60,7 @@ export async function parseHeaders(r: FetchResult): Promise<ParsedHeaders> {
     from: addr(email.from),
     replyTo: (email.replyTo ?? []).map(addr).filter((a): a is Address => a !== null),
     subject: clean(email.subject),
-    date: email.date ?? null,
+    date: email.date ? clean(email.date, 60) : null,
     inReplyTo: validMessageId(irt) ? irt : null,
     references: (email.references ?? "").split(/\s+/).filter(validMessageId),
   };
