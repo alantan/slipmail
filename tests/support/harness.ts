@@ -52,3 +52,18 @@ export function rfc822(headers: Record<string, string>, body: string): string {
   const head = Object.entries(headers).map(([k, v]) => `${k}: ${v}`).join("\r\n");
   return `${head}\r\n\r\n${body.replace(/\r?\n/g, "\r\n")}`;
 }
+
+/** Decoded bodies of a multipart/alternative draft, keyed by content type (e.g. "text/html"). */
+export function draftParts(raw: string): Record<string, string> {
+  const boundary = /Content-Type: multipart\/alternative; boundary="([^"]+)"/.exec(raw)?.[1];
+  if (!boundary) throw new Error("draft is not multipart/alternative");
+  const out: Record<string, string> = {};
+  for (const chunk of raw.split(`--${boundary}`).slice(1, -1)) {
+    const [head, ...rest] = chunk.split("\r\n\r\n");
+    const type = /Content-Type: ([^;\r\n]+); charset=utf-8/.exec(head)?.[1];
+    if (!type || !/Content-Transfer-Encoding: base64/.test(head)) throw new Error("bad part headers");
+    const b64 = rest.join("\r\n\r\n").replace(/\s+/g, "");
+    out[type] = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+  }
+  return out;
+}
