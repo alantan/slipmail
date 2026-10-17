@@ -36,10 +36,10 @@ fallback for webmail that stores the Sent copy of a reply without any threading 
 once: a `Re:` subject whose base subject equals the original's, the original's `Reply-To` (else `From`)
 address among the Sent message's `To`/`Cc` (exact address comparison), and a Sent `INTERNALDATE` no earlier
 than the original's own `INTERNALDATE` (the server's receipt time, not the sender-controlled `Date` header).
-It looks only at Sent messages since the day before the original arrived, newest 100 at most. It is
-thread-level in effect: a later reply to the same sender and subject also marks an earlier unanswered message
-from that sender as handled. It only runs while the UID is still in the Inbox, because it needs the original's
-headers.
+It looks only at Sent messages since the day before the original arrived, newest 500 at most, stopping at the
+first one older than the original. It is thread-level in effect: a later reply to the same sender and subject
+also marks an earlier unanswered message from that sender as handled. It only runs while the UID is still in
+the Inbox, because it needs the original's headers.
 
 Note: IMAP `N:*` always returns the highest message even when its UID is below `N`, so `list-new` filters by
 UID itself.

@@ -27,11 +27,13 @@ async function anyExact(
 
 /** Subject without leading reply/forward prefixes, whitespace-collapsed and lower-cased. */
 export function baseSubject(subject: string): string {
-  return subject.replace(/^(\s*(re|fwd?)\s*:)+/i, "").replace(/\s+/g, " ").trim().toLowerCase();
+  // Capped well below clean()'s 300 characters: a "Re: " prefix can push the end of a long subject past it.
+  return subject.replace(/^(\s*(re|fwd?)\s*:)+/i, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 200);
 }
 
 const REPLY_PREFIX = /^\s*re\s*:/i;
 const DAY_MS = 86_400_000;
+const MAX_FALLBACK_SCAN = 500;
 
 export interface HandledOptions {
   /** Message-ID recorded by the caller from list-new; needed once the UID has left the Inbox. */
@@ -132,15 +134,27 @@ async function sentReplyByContent(
   if (!sentExamined) await s.client.examine(s.folders.sent);
   // SINCE ignores the time of day and timezone, so start a day early and compare exactly afterwards.
   const hits = await s.client.uidSearch({ kind: "since", day: new Date(receivedAt - DAY_MS) });
-  return await anyExact(
-    s,
-    hits,
-    ["Subject", "To", "Cc"],
-    (h, r) => {
-      if (h.truncated || !REPLY_PREFIX.test(h.subject) || baseSubject(h.subject) !== subject) return false;
+  // Newest first, and stop as soon as a chunk reaches messages older than the original: a reply can only
+  // be newer, so everything beyond that point is irrelevant. Bounded at MAX_FALLBACK_SCAN messages.
+  const uids = [...new Set(hits)].sort((x, y) => y - x).slice(0, MAX_FALLBACK_SCAN);
+  for (let i = 0; i < uids.length; i += VERIFY_CHUNK) {
+    const rows = await s.client.uidFetch(toUidSet(uids.slice(i, i + VERIFY_CHUNK)), {
+      headerFields: ["Subject", "To", "Cc"],
+      internalDate: true,
+    });
+    let reachedOlder = false;
+    for (const r of rows) {
       const sentAt = parseInternalDate(r.internalDate);
-      return sentAt !== null && sentAt >= receivedAt && h.recipients.some((a) => senders.has(a));
-    },
-    true,
-  );
+      if (sentAt === null) continue;
+      if (sentAt < receivedAt) {
+        reachedOlder = true;
+        continue;
+      }
+      const h = await parseHeaders(r);
+      if (h.truncated || !REPLY_PREFIX.test(h.subject) || baseSubject(h.subject) !== subject) continue;
+      if (h.recipients.some((a) => senders.has(a))) return true;
+    }
+    if (reachedOlder) break;
+  }
+  return false;
 }

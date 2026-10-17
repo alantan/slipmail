@@ -200,9 +200,38 @@ Deno.test("parseHeaders: an unparseable header block fails closed as truncated i
     seq: 1,
     uid: 1,
     flags: [],
-    header: new TextEncoder().encode(`To: ${"x".repeat(70_000)}`),
-    headerTruncated: true,
+    header: new Uint8Array(0), // postal-mime throws on this
+    headerTruncated: false,
   });
   assertEquals(h.truncated, true);
   assertEquals(h.messageId, null);
+});
+
+Deno.test("sent fallback: an original without a Message-ID is still matched", async () => {
+  const o = original();
+  const noId = { ...o, raw: o.raw.replace(/^Message-ID:.*\r\n/im, "") };
+  const { r } = await check([noId], [sentCopy()]);
+  assertEquals(r.messageId, null);
+  assertEquals(r.sentReply, true);
+  assertEquals(r.sentReplyBasis, "subject-and-recipient");
+});
+
+Deno.test("sent fallback: the sender can be reached through an RFC 5322 group in To", async () => {
+  const { r } = await check([original()], [sentCopy({ To: "Team: carol@example.com, alice@example.com;" })]);
+  assertEquals(r.sentReply, true);
+});
+
+Deno.test("sent fallback: a subject near the 300-character cap still matches its Re: reply", async () => {
+  const long = "Budget ".repeat(42).trim(); // 293 characters
+  const { r } = await check([original({ Subject: long })], [sentCopy({ Subject: `Re: ${long}` })]);
+  assertEquals(r.sentReply, true);
+});
+
+Deno.test("sent fallback: finds the reply even when more than 100 later messages sit in Sent", async () => {
+  const later: Msg[] = Array.from(
+    { length: 120 },
+    (_, i) => sentCopy({ Subject: `Unrelated ${i}`, To: "dave@example.com" }, "17-Oct-2026 11:00:00 +0000"),
+  );
+  const { r } = await check([original()], [sentCopy(), ...later]);
+  assertEquals(r.sentReply, true);
 });

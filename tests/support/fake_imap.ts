@@ -616,7 +616,7 @@ function matches(m: FakeMessage, seq: number, folder: FakeFolder, toks: Tok[]): 
       }
       case "SINCE": {
         const day = (v: string) => {
-          const p = /^(\d{1,2})-([A-Za-z]{3})-(\d{4})/.exec(v);
+          const p = /^\s*(\d{1,2})-([A-Za-z]{3})-(\d{4})/.exec(v.trim());
           if (!p) return NaN;
           const mon = MONTHS.indexOf(p[2].toLowerCase());
           return Date.UTC(Number(p[3]), mon, Number(p[1]));
