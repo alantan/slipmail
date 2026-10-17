@@ -25,8 +25,11 @@ export interface ParsedHeaders {
   replyTo: Address[];
   subject: string;
   date: string | null;
-  inReplyTo: string | null;
+  /** Every valid Message-ID in In-Reply-To (the field may legally list several). */
+  inReplyTo: string[];
   references: string[];
+  /** The header block hit the partial-fetch budget: fields may be missing or cut short. */
+  truncated: boolean;
 }
 
 // Printable ASCII only (no space, quote, backslash, angle brackets inside): safe to place in an IMAP SEARCH.
@@ -51,10 +54,14 @@ export function addr(a: { name?: string; address?: string } | undefined): Addres
   return { name: clean(a.name, 120), address: clean(a.address, 254) };
 }
 
+/** Extracts every valid <id> token (bounded count), ignoring anything malformed around them. */
+export function messageIds(field: string | undefined | null): string[] {
+  return (field ?? "").match(/<[^<>\s]{1,200}>/g)?.filter(validMessageId).slice(0, 50) ?? [];
+}
+
 export async function parseHeaders(r: FetchResult): Promise<ParsedHeaders> {
   const email = await PostalMime.parse(r.header ?? new Uint8Array());
   const mid = email.messageId?.trim();
-  const irt = email.inReplyTo?.trim();
   return {
     uid: r.uid,
     messageId: validMessageId(mid) ? mid : null,
@@ -62,7 +69,8 @@ export async function parseHeaders(r: FetchResult): Promise<ParsedHeaders> {
     replyTo: (email.replyTo ?? []).map(addr).filter((a): a is Address => a !== null),
     subject: clean(email.subject),
     date: email.date ? clean(email.date, 60) : null,
-    inReplyTo: validMessageId(irt) ? irt : null,
-    references: (email.references ?? "").split(/\s+/).filter(validMessageId),
+    inReplyTo: messageIds(email.inReplyTo),
+    references: messageIds(email.references),
+    truncated: r.headerTruncated === true,
   };
 }

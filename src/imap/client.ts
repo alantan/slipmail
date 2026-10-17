@@ -65,6 +65,8 @@ export interface FetchResult {
   source?: Uint8Array;
   /** Requested header block, when `headerFields` was requested. */
   header?: Uint8Array;
+  /** The server returned a full partial-fetch budget: the block was cut and fields may be missing. */
+  headerTruncated?: boolean;
 }
 
 export interface FetchWhat {
@@ -227,6 +229,11 @@ export class ImapClient {
         }
         // Servers may interleave unsolicited updates (e.g. flags for other messages) and split
         // one message across several responses: merge by UID and keep only requested UIDs.
+        if (r.header && r.header.length >= HEADER_PARTIAL_BYTES) {
+          // Cut at the last complete line so no half-read value can be parsed as a whole one.
+          r.header = r.header.subarray(0, lastCrlf(r.header));
+          r.headerTruncated = true;
+        }
         if (!r.uid || !inUidSet(r.uid, set)) return;
         const prev = byUid.get(r.uid);
         byUid.set(r.uid, prev ? { ...prev, ...r } : { flags: [], ...r });
@@ -340,6 +347,11 @@ export async function writeAll(
 ): Promise<void> {
   let off = 0;
   while (off < data.length) off += await w.write(data.subarray(off));
+}
+
+function lastCrlf(b: Uint8Array): number {
+  for (let i = b.length - 2; i >= 0; i--) if (b[i] === 13 && b[i + 1] === 10) return i + 2;
+  return 0;
 }
 
 function inUidSet(uid: number, set: string): boolean {

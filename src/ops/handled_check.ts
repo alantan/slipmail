@@ -60,7 +60,7 @@ export async function handledCheck(s: Session, uid: number, opts: HandledOptions
       s,
       hits,
       ["In-Reply-To", "References"],
-      (h) => h.inReplyTo === messageId || h.references.includes(messageId),
+      (h) => h.inReplyTo.includes(messageId) || h.references.includes(messageId),
     );
   }
 

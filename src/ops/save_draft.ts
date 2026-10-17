@@ -19,6 +19,10 @@ export async function saveDraft(s: Session, uid: number, body: string) {
   );
   if (!row) throw new OpError("not_found", "no such message in the Inbox");
   const h = await parseHeaders(row);
+  // A cut-off block could lose the real Reply-To (or clip an address) and misdirect the draft.
+  if (h.truncated) {
+    throw new OpError("headers_too_large", "original message headers are too large to read safely");
+  }
 
   // The recipient comes only from the original message: Reply-To, else From. Never from the caller.
   // The first usable address wins; an unparseable Reply-To entry does not block a valid later one or From.

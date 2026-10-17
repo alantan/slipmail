@@ -46,9 +46,15 @@ export function htmlToText(html: string): string {
       continue;
     }
     const closing = m?.[1] === "/";
-    const name = m?.[2] ?? "";
+    // "<script-x>" or "<svg:script>" are different elements, not <script>.
+    const nextCh = m ? lower[lt + m[0].length] : undefined;
+    const name = m && !(nextCh && /[_:-]/.test(nextCh)) ? m[2] : "";
     if (!closing && DROP_BLOCKS.has(name)) {
-      const close = lower.indexOf(`</${name}`, lt + 1);
+      let close = lower.indexOf(`</${name}`, lt + 1);
+      // "</scripture>" is not "</script>": require a tag-name boundary (search only moves forward).
+      while (close >= 0 && /[a-z0-9_:-]/.test(lower[close + name.length + 2] ?? "")) {
+        close = lower.indexOf(`</${name}`, close + 1);
+      }
       if (close < 0) break; // unterminated: drop the rest
       const end = html.indexOf(">", close);
       if (end < 0) break;

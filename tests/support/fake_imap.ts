@@ -554,6 +554,17 @@ function envelope(raw: string): string {
   } ${addrList(g("cc"))} NIL ${s(g("in-reply-to"))} ${s(g("message-id"))})`;
 }
 
+const maxUidCache = new WeakMap<FakeFolder, { count: number; max: number }>();
+
+/** Highest UID in a folder; memoized per message count so SEARCH over n messages stays O(n). */
+function maxUidOf(folder: FakeFolder): number {
+  const hit = maxUidCache.get(folder);
+  if (hit && hit.count === folder.messages.length) return hit.max;
+  const max = folder.messages.reduce((a, x) => Math.max(a, x.uid), 0);
+  maxUidCache.set(folder, { count: folder.messages.length, max });
+  return max;
+}
+
 function matches(m: FakeMessage, seq: number, folder: FakeFolder, toks: Tok[]): boolean {
   // Consumes tokens left to right; all top-level criteria are ANDed.
   const next = (): boolean => {
@@ -581,7 +592,7 @@ function matches(m: FakeMessage, seq: number, folder: FakeFolder, toks: Tok[]): 
         return m.flags.includes("\\Seen");
       case "UID": {
         const set = String(toks.shift());
-        const max = folder.messages.reduce((a, x) => Math.max(a, x.uid), 0);
+        const max = maxUidOf(folder);
         return parseSet(set, max).some(([lo, hi]) => m.uid >= lo && m.uid <= hi);
       }
       case "HEADER": {
