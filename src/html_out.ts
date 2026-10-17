@@ -17,7 +17,10 @@ function renderLine(line: string): string {
   return nbsp + escapeHtml(line.slice(lead.length));
 }
 
-function renderBlocks(lines: string[]): string {
+// Quote nesting beyond this is rendered as plain escaped text: bounds recursion and blockquote depth.
+const MAX_QUOTE_DEPTH = 20;
+
+function renderBlocks(lines: string[], depth = 0): string {
   const blocks: string[][] = [];
   let cur: string[] = [];
   for (const line of lines) {
@@ -31,10 +34,10 @@ function renderBlocks(lines: string[]): string {
   if (cur.length) blocks.push(cur);
 
   return blocks.map((block) => {
-    if (block.every((l) => l.startsWith(">"))) {
+    if (depth < MAX_QUOTE_DEPTH && block.every((l) => l.startsWith(">"))) {
       // Drop one ">" and one optional space per line, then handle the inner text the same way.
-      const inner = block.map((l) => l.slice(1).replace(/^ /, ""));
-      return `<blockquote style="${QUOTE_STYLE}">${renderBlocks(inner)}</blockquote>`;
+      const inner = renderBlocks(block.map((l) => l.slice(1).replace(/^ /, "")), depth + 1);
+      return inner && `<blockquote style="${QUOTE_STYLE}">${inner}</blockquote>`;
     }
     return `<p style="${P_STYLE}">${block.map(renderLine).join("<br>")}</p>`;
   }).join("");

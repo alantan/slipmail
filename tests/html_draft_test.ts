@@ -54,6 +54,18 @@ Deno.test("html: a quote block drops its > prefixes and recurses for deeper leve
   );
 });
 
+Deno.test("html: pathological quote nesting is bounded and does not overflow the stack", () => {
+  const html = textToHtml(">".repeat(100_000) + " deep");
+  assertEquals(html.match(/<blockquote /g)!.length, 20);
+  assert(html.includes("&gt;&gt;&gt;"), "levels past the cap are escaped text");
+  assertEquals(html.match(/<blockquote /g)!.length, html.match(/<\/blockquote>/g)!.length);
+});
+
+Deno.test("html: a bare quote marker produces no empty blockquote", () => {
+  assertEquals(textToHtml(">\n\nhi"), wrap(`<p ${P}>hi</p>`));
+  assertEquals(textToHtml("> \n>"), wrap(""));
+});
+
 Deno.test("html: a block that mixes quoted and unquoted lines is an escaped paragraph", () => {
   assertEquals(textToHtml("On Monday, A wrote:\n> hi"), wrap(`<p ${P}>On Monday, A wrote:<br>&gt; hi</p>`));
 });
