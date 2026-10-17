@@ -17,17 +17,18 @@ export async function listNew(s: Session, afterUid: number) {
     .filter((u) => u > afterUid)
     .sort((a, b) => a - b);
   const wanted = uids.slice(0, limit);
-  const rows = [];
-  for (let i = 0; i < wanted.length; i += FETCH_CHUNK) {
-    rows.push(
-      ...await s.client.uidFetch(toUidSet(wanted.slice(i, i + FETCH_CHUNK)), { headerFields: HEADER_FIELDS }),
-    );
-  }
+  // Parse each batch as it arrives so raw header blocks are released instead of accumulating.
   const messages = [];
-  for (const r of rows.sort((a, b) => a.uid - b.uid)) {
-    const h = await parseHeaders(r);
-    messages.push({ uid: h.uid, messageId: h.messageId, from: h.from, subject: h.subject, date: h.date });
+  for (let i = 0; i < wanted.length; i += FETCH_CHUNK) {
+    const rows = await s.client.uidFetch(toUidSet(wanted.slice(i, i + FETCH_CHUNK)), {
+      headerFields: HEADER_FIELDS,
+    });
+    for (const r of rows) {
+      const h = await parseHeaders(r);
+      messages.push({ uid: h.uid, messageId: h.messageId, from: h.from, subject: h.subject, date: h.date });
+    }
   }
+  messages.sort((a, b) => a.uid - b.uid);
   return {
     uidValidity: info.uidValidity,
     uidNext: info.uidNext || null,

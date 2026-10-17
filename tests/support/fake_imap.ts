@@ -102,7 +102,12 @@ export class FakeImapServer {
         return;
       }
       this.conns.add(conn);
-      this.session(conn).catch(() => {}).finally(() => this.conns.delete(conn));
+      this.session(conn).catch(() => {}).finally(() => {
+        try {
+          conn.close(); // release the server-side TLS resource before forgetting it
+        } catch { /* already closed */ }
+        this.conns.delete(conn);
+      });
     }
   }
 
@@ -376,9 +381,10 @@ export class FakeImapServer {
         } else if (u === "ENVELOPE") parts.push(`ENVELOPE ${envelope(m.raw)}`);
         else if (u.startsWith("BODY.PEEK[") || u.startsWith("BODY[")) {
           const section = it.slice(it.indexOf("[") + 1, it.lastIndexOf("]"));
-          const data = bodySection(m.raw, section);
-          const bytes = enc.encode(data);
-          const label = `BODY[${section}]`;
+          const partial = it.slice(it.lastIndexOf("]") + 1).match(/^<0\.(\d+)>$/);
+          const full = enc.encode(bodySection(m.raw, section));
+          const bytes = partial ? full.subarray(0, Number(partial[1])) : full;
+          const label = `BODY[${section}]${partial ? "<0>" : ""}`;
           parts.push(label + ` {${bytes.length}}\r\n`, bytes);
         }
       }

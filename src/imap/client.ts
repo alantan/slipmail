@@ -89,7 +89,12 @@ interface RunOpts {
   onUntagged?: (kind: string, num: number | undefined, p: ResponseParser) => Promise<void>;
   onStatus?: (text: string) => void;
   continuation?: () => string | Uint8Array;
+  /** Tighter literal cap for this command (default: the connection-wide cap). */
+  maxLiteral?: number;
 }
+
+/** Upper bound on any header block we ask for or accept when no full source was requested. */
+export const HEADER_PARTIAL_BYTES = 64 * 1024;
 
 export class ImapClient {
   capabilities = new Set<string>();
@@ -200,10 +205,12 @@ export class ImapClient {
       for (const h of what.headerFields) {
         if (!HEADER_NAME.test(h)) throw new ProtocolError("invalid header name");
       }
-      items.push(`BODY.PEEK[HEADER.FIELDS (${what.headerFields.join(" ")})]`);
+      // Partial fetch: a hostile message cannot make the server send (or us allocate) a huge header block.
+      items.push(`BODY.PEEK[HEADER.FIELDS (${what.headerFields.join(" ")})]<0.${HEADER_PARTIAL_BYTES}>`);
     }
     const byUid = new Map<number, FetchResult>();
     await this.run("UID FETCH", `${set} (${items.join(" ")})`, {
+      maxLiteral: what.source ? undefined : HEADER_PARTIAL_BYTES + 4096,
       onUntagged: async (kind, n, p) => {
         if (kind !== "FETCH" || n === undefined) return await drain(p);
         const list = nodeList(await p.value());
@@ -287,7 +294,7 @@ export class ImapClient {
         continue;
       }
       if (line.startsWith("* ")) {
-        const p = new ResponseParser(line.slice(2), this.reader, this.maxLiteral);
+        const p = new ResponseParser(line.slice(2), this.reader, opts.maxLiteral ?? this.maxLiteral);
         let first = p.atomRaw();
         let num: number | undefined;
         if (/^\d+$/.test(first)) {
