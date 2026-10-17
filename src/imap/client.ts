@@ -294,6 +294,7 @@ export class ImapClient {
           throw new ImapCommandError(status, `${verb} failed: ${fromWire(m[3]).slice(0, 200)}`);
         }
         this.noteCapabilityCode(m[3]);
+        opts.onStatus?.(m[3]);
         return;
       }
       // Anything else is a protocol violation.

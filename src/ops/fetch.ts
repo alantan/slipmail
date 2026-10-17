@@ -28,6 +28,19 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+/** Writes a new file; a repeat fetch is idempotent if an identical regular file is already there. */
+async function writeOnce(path: string, bytes: Uint8Array): Promise<void> {
+  try {
+    await Deno.writeFile(path, bytes, { createNew: true, mode: 0o600 });
+  } catch (e) {
+    if (!(e instanceof Deno.errors.AlreadyExists)) throw e;
+    const st = await Deno.lstat(path); // lstat: never follow a symlink planted at this name
+    const same = st.isFile && st.size === bytes.length &&
+      (await Deno.readFile(path)).every((b, i) => b === bytes[i]);
+    if (!same) throw new OpError("scratch_conflict", "a different file already exists at the target path");
+  }
+}
+
 export async function fetchMessage(s: Session, uid: number) {
   const { limits, scratchDir } = s.config;
   const info = await s.client.examine(s.folders.inbox);
@@ -81,7 +94,7 @@ export async function fetchMessage(s: Session, uid: number) {
       }
       const path = `${dir}/${i + 1}-${safe.name}`;
       // createNew refuses to follow or replace an existing file or symlink.
-      await Deno.writeFile(path, bytes, { createNew: true, mode: 0o600 });
+      await writeOnce(path, bytes);
       entry.saved = true;
       entry.path = path;
     }

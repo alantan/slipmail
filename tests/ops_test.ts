@@ -394,7 +394,9 @@ Deno.test("handled-check: untouched message is not handled and no flags are set"
 
 Deno.test("handled-check: UID gone from Inbox but Message-ID found in Archive", async () => {
   const archive = [{ raw: mail({ "Message-ID": "<gone@example.com>" }) }];
-  await withSession(mailbox({ archive }), {}, async ({ s }) => {
+  // UID 7 was assigned earlier and has since left the Inbox, so UIDNEXT is already past it.
+  const inbox = [{ uid: 9, raw: mail({ "Message-ID": "<later@example.com>" }) }];
+  await withSession(mailbox({ inbox, archive }), {}, async ({ s }) => {
     const r = await handledCheck(s, 7, { messageId: "<gone@example.com>" });
     assertEquals(r.movedOutOfInbox, true);
     assertEquals(r.foundInArchive, true);

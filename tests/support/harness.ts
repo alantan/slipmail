@@ -1,4 +1,10 @@
-import { type FakeFolder, FakeImapServer, makeFolder, makeTestCerts } from "./fake_imap.ts";
+import {
+  type FakeFolder,
+  FakeImapServer,
+  type FakeServerOptions,
+  makeFolder,
+  makeTestCerts,
+} from "./fake_imap.ts";
 import { ImapClient } from "../../src/imap/client.ts";
 
 export const USER = "me@example.test";
@@ -23,10 +29,13 @@ export function standardFolders(
   ];
 }
 
-export async function startHarness(folders: FakeFolder[] = standardFolders()): Promise<Harness> {
+export async function startHarness(
+  folders: FakeFolder[] = standardFolders(),
+  extra: Partial<FakeServerOptions> = {},
+): Promise<Harness> {
   const dir = await Deno.makeTempDir({ prefix: "slipmail-test-" });
   const { cert, key, ca } = await makeTestCerts(dir);
-  const server = new FakeImapServer({ user: USER, password: PASSWORD, cert, key, folders });
+  const server = new FakeImapServer({ user: USER, password: PASSWORD, cert, key, folders, ...extra });
   return {
     server,
     ca,

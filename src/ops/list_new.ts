@@ -1,29 +1,27 @@
 import { HEADER_FIELDS, parseHeaders } from "../headers.ts";
-import type { FetchResult } from "../imap/client.ts";
 import type { Session } from "../session.ts";
-
-const MAX_WINDOWS = 50;
 
 export async function listNew(s: Session, afterUid: number) {
   const info = await s.client.examine(s.folders.inbox);
   const limit = s.config.limits.maxListed;
-  // Walk bounded UID windows rather than "n:*" so work stays proportional to the limit even on a
-  // huge Inbox (and sidesteps the RFC 3501 rule that "n:*" returns the last message when n is past it).
-  const windowSize = Math.max(limit, 100);
-  const found: FetchResult[] = [];
-  let from = afterUid + 1;
-  for (let w = 0; w < MAX_WINDOWS && from < info.uidNext && found.length <= limit; w++) {
-    const to = Math.min(from + windowSize - 1, info.uidNext - 1);
-    const rows = await s.client.uidFetch(`${from}:${to}`, { headerFields: HEADER_FIELDS });
-    found.push(...rows.filter((r) => r.uid >= from && r.uid <= to));
-    from = to + 1;
-  }
-  found.sort((a, b) => a.uid - b.uid);
+  // One cheap round trip for the UIDs themselves, then headers only for the ones we will return.
+  // "n:*" always includes the highest message even when it is below n (RFC 3501), so filter.
+  const uids = (await s.client.uidSearch({ kind: "uid", set: `${afterUid + 1}:*` }))
+    .filter((u) => u > afterUid)
+    .sort((a, b) => a - b);
+  const wanted = uids.slice(0, limit);
+  const rows = wanted.length
+    ? await s.client.uidFetch(wanted.join(","), { headerFields: HEADER_FIELDS })
+    : [];
   const messages = [];
-  for (const r of found.slice(0, limit)) {
+  for (const r of rows.sort((a, b) => a.uid - b.uid)) {
     const h = await parseHeaders(r);
     messages.push({ uid: h.uid, messageId: h.messageId, from: h.from, subject: h.subject, date: h.date });
   }
-  const truncated = found.length > limit || from < info.uidNext;
-  return { uidValidity: info.uidValidity, uidNext: info.uidNext, messages, truncated };
+  return {
+    uidValidity: info.uidValidity,
+    uidNext: info.uidNext || null,
+    messages,
+    truncated: uids.length > limit,
+  };
 }

@@ -10,12 +10,6 @@ const HOST = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
 // Deliberately narrow: commas would split --allow-read=a,b into several paths.
 const SAFE_PATH = /^\/[A-Za-z0-9._\/+@-]*$/;
 
-function need(name: string): string {
-  const v = Deno.env.get(name);
-  if (!v) throw new Error(`${name} is required`);
-  return v;
-}
-
 export function resolveBuildConfig(env: (k: string) => string | undefined) {
   const host = env("IMAP_HOST") ?? "";
   if (!HOST.test(host)) throw new Error("IMAP_HOST must be a plain hostname");
@@ -36,6 +30,11 @@ export function resolveBuildConfig(env: (k: string) => string | undefined) {
     if (val) {
       // deno-lint-ignore no-control-regex
       if (/[\u0000-\u001f"\\]/.test(val)) throw new Error(`${v} contains unsupported characters`);
+      if (/[^\x20-\x7e]/.test(val)) {
+        throw new Error(
+          `${v} must be ASCII: give the server's raw folder name (modified UTF-7 for non-ASCII names)`,
+        );
+      }
       overrides[k] = val;
     }
   }
@@ -68,7 +67,6 @@ Deno.exit(code);
 
 if (import.meta.main) {
   const c = resolveBuildConfig((k) => Deno.env.get(k));
-  need("IMAP_HOST");
   const out = Deno.env.get("OUT") ?? "dist/slipmail";
   await Deno.mkdir("dist", { recursive: true });
   await Deno.writeTextFile("dist/entry.ts", entrySource(c));

@@ -17,11 +17,14 @@ export async function handledCheck(s: Session, uid: number, opts: HandledOptions
   if (opts.uidValidity !== undefined && opts.uidValidity !== info.uidValidity) {
     throw new OpError("uidvalidity_changed", "Inbox UIDVALIDITY changed; stored UIDs are no longer valid");
   }
+  if (info.uidNext && uid >= info.uidNext) {
+    throw new OpError("not_found", "UID has not been assigned in the Inbox yet");
+  }
   const rows = await s.client.uidFetch(String(uid), { flags: true, headerFields: ["Message-ID"] });
   const row = rows.find((r) => r.uid === uid);
   const inInbox = !!row;
   const answered = !!row?.flags.some((f) => f.toLowerCase() === "\\answered");
-  const messageId = row ? (await parseHeaders(row)).messageId : opts.messageId ?? null;
+  const messageId = (row ? (await parseHeaders(row)).messageId : null) ?? opts.messageId ?? null;
 
   let sentReply = false;
   if (messageId) {

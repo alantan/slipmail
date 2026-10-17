@@ -24,6 +24,8 @@ export interface FakeServerOptions {
   key: string;
   folders: FakeFolder[];
   capabilities?: string[];
+  /** How EXAMINE/SELECT reports UIDVALIDITY/UIDNEXT. Default "untagged". */
+  examineStyle?: "untagged" | "tagged-only" | "no-uidnext";
 }
 
 type Tok = string | Tok[];
@@ -251,11 +253,20 @@ export class FakeImapServer {
               selected = f;
               await send(`* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n`);
               await send(`* ${f.messages.length} EXISTS\r\n* 0 RECENT\r\n`);
-              await send(`* OK [UIDVALIDITY ${f.uidValidity}] ok\r\n* OK [UIDNEXT ${f.nextUid}] ok\r\n`);
+              const style = this.opts.examineStyle ?? "untagged";
+              if (style === "untagged") {
+                await send(`* OK [UIDVALIDITY ${f.uidValidity}] ok\r\n* OK [UIDNEXT ${f.nextUid}] ok\r\n`);
+              } else if (style === "no-uidnext") {
+                await send(`* OK [UIDVALIDITY ${f.uidValidity}] ok\r\n`);
+              }
+              // "tagged-only": UIDVALIDITY/UIDNEXT appear solely as codes on the tagged OK.
+              const codes = style === "tagged-only"
+                ? `[UIDVALIDITY ${f.uidValidity}] [UIDNEXT ${f.nextUid}] `
+                : "";
               await send(
                 effective === "SELECT"
-                  ? `${tag} OK [READ-WRITE] SELECT completed\r\n`
-                  : `${tag} OK [READ-ONLY] EXAMINE completed\r\n`,
+                  ? `${tag} OK [READ-WRITE] ${codes}SELECT completed\r\n`
+                  : `${tag} OK [READ-ONLY] ${codes}EXAMINE completed\r\n`,
               );
               break;
             }
