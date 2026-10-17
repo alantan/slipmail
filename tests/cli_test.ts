@@ -2,7 +2,14 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { readCapped, run } from "../src/cli.ts";
 import { OpError } from "../src/session.ts";
 import { FakeSecrets, makeCtx, type TestCtx } from "./support/ctx.ts";
-import { type Harness, PASSWORD, rfc822, standardFolders, startHarness } from "./support/harness.ts";
+import {
+  draftParts,
+  type Harness,
+  PASSWORD,
+  rfc822,
+  standardFolders,
+  startHarness,
+} from "./support/harness.ts";
 
 const enc = new TextEncoder();
 
@@ -156,10 +163,11 @@ Deno.test("cli: save-draft appends a threaded reply to Drafts", async () => {
     assertEquals(seenMax, s.ctx.config.limits.maxDraftBytes);
     const drafts = s.h.server.folder("Drafts").messages;
     assertEquals(drafts.length, 1);
-    // Draft bodies are base64 encoded (src/mime_out.ts), so decode the part after the header block.
+    // Drafts are multipart/alternative with base64 parts (src/mime_out.ts).
     const raw = drafts[0].raw;
-    const b64Body = raw.slice(raw.indexOf("\r\n\r\n") + 4).replace(/\s+/g, "");
-    assertEquals(new TextDecoder().decode(Uint8Array.from(atob(b64Body), (c) => c.charCodeAt(0))), "Thanks!");
+    const parts = draftParts(raw);
+    assertEquals(parts["text/plain"], "Thanks!");
+    assertEquals(parts["text/html"].includes("<p "), true);
     assert(raw.includes("In-Reply-To: <a1@example.com>"));
   } finally {
     await s.done();

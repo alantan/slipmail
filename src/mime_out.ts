@@ -1,6 +1,8 @@
 // Construction of the outgoing draft. Every header value is validated or encoded so that
 // hostile input from the original message cannot inject headers or extra recipients.
 
+import { textToHtml } from "./html_out.ts";
+
 const ADDR = /^[A-Za-z0-9][A-Za-z0-9._%+'=-]{0,63}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
 export function validAddress(a: string): boolean {
@@ -63,12 +65,26 @@ function foldReferences(ids: string[]): string {
   return lines.join("\r\n");
 }
 
+/** Base64 of UTF-8 text, wrapped at 76 columns with CRLF and no trailing line break. */
+function b64Wrapped(text: string): string {
+  return b64(new TextEncoder().encode(text)).replace(/(.{76})/g, "$1\r\n").replace(/\r\n$/, "");
+}
+
 export function buildDraft(p: DraftParts): Uint8Array {
   if (!validAddress(p.from) || !validAddress(p.to)) throw new Error("invalid address");
   const date = (p.now ?? new Date()).toUTCString().replace("GMT", "+0000");
   const messageId = `<${crypto.randomUUID()}@${p.idDomain}>`;
   const text = p.body.replace(/\r\n|\r|\n/g, "\r\n");
-  const encoded = b64(new TextEncoder().encode(text)).replace(/(.{76})/g, "$1\r\n");
+  const boundary = `slipmail-${crypto.randomUUID()}`;
+  const part = (type: string, content: string) =>
+    [
+      `--${boundary}`,
+      `Content-Type: ${type}; charset=utf-8`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      b64Wrapped(content),
+    ]
+      .join("\r\n");
   const headers = [
     `From: ${p.from}`,
     `To: ${p.to}`,
@@ -78,8 +94,10 @@ export function buildDraft(p: DraftParts): Uint8Array {
     `In-Reply-To: ${p.inReplyTo}`,
     foldReferences(p.references),
     "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=utf-8",
-    "Content-Transfer-Encoding: base64",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
-  return new TextEncoder().encode(headers.join("\r\n") + "\r\n\r\n" + encoded.replace(/\r\n$/, "") + "\r\n");
+  const body = [part("text/plain", text), part("text/html", textToHtml(text)), `--${boundary}--`].join(
+    "\r\n",
+  );
+  return new TextEncoder().encode(headers.join("\r\n") + "\r\n\r\n" + body + "\r\n");
 }
