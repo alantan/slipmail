@@ -8,6 +8,7 @@ import { handledCheck } from "./ops/handled_check.ts";
 import { listNew } from "./ops/list_new.ts";
 import { saveDraft, validateDraftBody } from "./ops/save_draft.ts";
 import { FolderError } from "./folders.ts";
+import { validMessageId } from "./headers.ts";
 import { SecretError, type SecretStore } from "./secrets.ts";
 import { openSession, OpError, parseUid } from "./session.ts";
 
@@ -94,6 +95,8 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
         if (uv !== undefined && (!/^[1-9]\d{0,9}$/.test(uv) || Number(uv) > 0xffffffff)) {
           throw new OpError("usage", "invalid --uidvalidity");
         }
+        const mid = p.flags.get("--message-id");
+        if (mid !== undefined && !validMessageId(mid)) throw new OpError("usage", "invalid --message-id");
         const s = await openSession(config, deps.secrets);
         try {
           result = await handledCheck(s, uid, {

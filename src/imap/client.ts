@@ -150,7 +150,11 @@ export class ImapClient {
   async login(user: string, password: string): Promise<void> {
     if (this.authenticated) return; // PREAUTH: re-authenticating would be a protocol error
     if (this.capabilities.has("AUTH=PLAIN")) {
-      const blob = btoa(String.fromCharCode(...new TextEncoder().encode(`\u0000${user}\u0000${password}`)));
+      let raw = "";
+      for (const b of new TextEncoder().encode(`\u0000${user}\u0000${password}`)) {
+        raw += String.fromCharCode(b);
+      }
+      const blob = btoa(raw);
       await this.run("AUTHENTICATE", "PLAIN", { continuation: () => blob + "\r\n" });
     } else if (this.capabilities.has("LOGINDISABLED")) {
       throw new ImapCommandError("NO", "server offers no usable login mechanism");
@@ -298,12 +302,14 @@ export class ImapClient {
   private async runInner(verb: string, args: string, opts: RunOpts): Promise<void> {
     if (!ALLOWED_COMMANDS.has(verb)) throw new ProtocolError(`command not permitted: ${verb}`);
     const tag = `s${++this.tag}`;
+    let continuation = opts.continuation; // single-use: a repeated "+" must not re-send the payload
     await writeAll(this.conn, new TextEncoder().encode(`${tag} ${verb}${args ? " " + args : ""}\r\n`));
     for (;;) {
       const line = await this.reader.readLine();
       if (line.startsWith("+")) {
-        if (!opts.continuation) throw new ProtocolError("unexpected continuation request");
-        const payload = opts.continuation();
+        if (!continuation) throw new ProtocolError("unexpected continuation request");
+        const payload = continuation();
+        continuation = undefined;
         await writeAll(this.conn, typeof payload === "string" ? new TextEncoder().encode(payload) : payload);
         continue;
       }
@@ -353,7 +359,11 @@ export async function writeAll(
   data: Uint8Array,
 ): Promise<void> {
   let off = 0;
-  while (off < data.length) off += await w.write(data.subarray(off));
+  while (off < data.length) {
+    const n = await w.write(data.subarray(off));
+    if (n <= 0) throw new ProtocolError("stream closed during write");
+    off += n;
+  }
 }
 
 function lastCrlf(b: Uint8Array): number {

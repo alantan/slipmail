@@ -126,6 +126,17 @@ Deno.test("cli: handled-check with a bad --uidvalidity is a usage error", async 
   }
 });
 
+Deno.test("cli: handled-check with a malformed --message-id is a usage error without connecting", async () => {
+  const s = await setup();
+  try {
+    const out = await invoke(s.ctx, { argv: ["handled-check", "1", "--message-id", "no-brackets"] });
+    assertUsageFailure(out);
+    assertEquals(s.h.server.commandLog.length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
 Deno.test("cli: save-draft appends a threaded reply to Drafts", async () => {
   const s = await setup();
   try {

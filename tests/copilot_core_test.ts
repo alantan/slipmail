@@ -207,3 +207,13 @@ Deno.test("htmlToText: an omitted </head> does not discard the body", () => {
 Deno.test("htmlToText: unclosed <li>/<p> elements stay on separate lines", () => {
   assertEquals(htmlToText("<ul><li>Item 1<li>Item 2</ul>"), "Item 1\nItem 2");
 });
+
+Deno.test("writeAll: a zero-byte write fails instead of spinning", async () => {
+  let threw = false;
+  try {
+    await writeAll({ write: () => Promise.resolve(0) }, new Uint8Array([1, 2, 3]));
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true);
+});
