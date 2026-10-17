@@ -42,6 +42,27 @@ export interface DraftParts {
   idDomain: string;
 }
 
+/**
+ * "References:" header, folded (RFC 5322 section 2.2.3) between identifiers so that physical lines
+ * stay within 78 characters where possible. An identifier longer than that stays on its own line.
+ * Unfolding (CRLF followed by WSP becomes a single space) yields the space-joined identifier list.
+ */
+function foldReferences(ids: string[]): string {
+  if (ids.length === 0) return "References: ";
+  const lines: string[] = [];
+  let line = `References: ${ids[0]}`;
+  for (const id of ids.slice(1)) {
+    if (line.length + 1 + id.length <= 78) {
+      line += ` ${id}`;
+    } else {
+      lines.push(line);
+      line = ` ${id}`;
+    }
+  }
+  lines.push(line);
+  return lines.join("\r\n");
+}
+
 export function buildDraft(p: DraftParts): Uint8Array {
   if (!validAddress(p.from) || !validAddress(p.to)) throw new Error("invalid address");
   const date = (p.now ?? new Date()).toUTCString().replace("GMT", "+0000");
@@ -55,7 +76,7 @@ export function buildDraft(p: DraftParts): Uint8Array {
     `Date: ${date}`,
     `Message-ID: ${messageId}`,
     `In-Reply-To: ${p.inReplyTo}`,
-    `References: ${p.references.join(" ")}`,
+    foldReferences(p.references),
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: base64",

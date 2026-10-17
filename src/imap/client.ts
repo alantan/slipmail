@@ -202,12 +202,12 @@ export class ImapClient {
       }
       items.push(`BODY.PEEK[HEADER.FIELDS (${what.headerFields.join(" ")})]`);
     }
-    const out: FetchResult[] = [];
+    const byUid = new Map<number, FetchResult>();
     await this.run("UID FETCH", `${set} (${items.join(" ")})`, {
       onUntagged: async (kind, n, p) => {
         if (kind !== "FETCH" || n === undefined) return await drain(p);
         const list = nodeList(await p.value());
-        const r: FetchResult = { seq: n, uid: 0, flags: [] };
+        const r: Partial<FetchResult> & { seq: number; uid: number } = { seq: n, uid: 0 };
         for (let i = 0; i + 1 < list.length; i += 2) {
           const key = String(nodeStr(list[i])).toUpperCase().replace(/<[\d.]+>$/, "");
           const val: Node = list[i + 1];
@@ -218,10 +218,14 @@ export class ImapClient {
           else if (key === "BODY[]") r.source = toBytes(val);
           else if (key.startsWith("BODY[HEADER")) r.header = toBytes(val);
         }
-        if (r.uid) out.push(r);
+        // Servers may interleave unsolicited updates (e.g. flags for other messages) and split
+        // one message across several responses: merge by UID and keep only requested UIDs.
+        if (!r.uid || !inUidSet(r.uid, set)) return;
+        const prev = byUid.get(r.uid);
+        byUid.set(r.uid, prev ? { ...prev, ...r } : { flags: [], ...r });
       },
     });
-    return out;
+    return [...byUid.values()];
   }
 
   async uidSearch(criterion: SearchCriterion): Promise<number[]> {
@@ -273,13 +277,13 @@ export class ImapClient {
   private async runInner(verb: string, args: string, opts: RunOpts): Promise<void> {
     if (!ALLOWED_COMMANDS.has(verb)) throw new ProtocolError(`command not permitted: ${verb}`);
     const tag = `s${++this.tag}`;
-    await this.conn.write(new TextEncoder().encode(`${tag} ${verb}${args ? " " + args : ""}\r\n`));
+    await writeAll(this.conn, new TextEncoder().encode(`${tag} ${verb}${args ? " " + args : ""}\r\n`));
     for (;;) {
       const line = await this.reader.readLine();
       if (line.startsWith("+")) {
         if (!opts.continuation) throw new ProtocolError("unexpected continuation request");
         const payload = opts.continuation();
-        await this.conn.write(typeof payload === "string" ? new TextEncoder().encode(payload) : payload);
+        await writeAll(this.conn, typeof payload === "string" ? new TextEncoder().encode(payload) : payload);
         continue;
       }
       if (line.startsWith("* ")) {
@@ -320,6 +324,25 @@ export class ImapClient {
       throw new ProtocolError("unexpected server response");
     }
   }
+}
+
+/** Socket writes may be short; keep going until the whole buffer is out. */
+export async function writeAll(
+  w: { write(p: Uint8Array): Promise<number> },
+  data: Uint8Array,
+): Promise<void> {
+  let off = 0;
+  while (off < data.length) off += await w.write(data.subarray(off));
+}
+
+function inUidSet(uid: number, set: string): boolean {
+  return set.split(",").some((part) => {
+    const [a, b] = part.split(":");
+    const lo = Number(a);
+    if (b === undefined) return uid === lo;
+    const hi = b === "*" ? Infinity : Number(b);
+    return uid >= Math.min(lo, hi) && uid <= Math.max(lo, hi);
+  });
 }
 
 async function drain(p: ResponseParser): Promise<void> {

@@ -1,6 +1,25 @@
-import { parseHeaders, validMessageId } from "../headers.ts";
+import { type ParsedHeaders, parseHeaders, validMessageId } from "../headers.ts";
 import type { SearchCriterion } from "../imap/client.ts";
+import { toUidSet } from "./list_new.ts";
 import { OpError, type Session } from "../session.ts";
+
+const MAX_VERIFY = 100;
+const VERIFY_CHUNK = 50;
+
+/** True if any candidate (newest first, bounded) satisfies `exact` once its headers are fetched. */
+async function anyExact(
+  s: Session,
+  candidates: number[],
+  fields: string[],
+  exact: (h: ParsedHeaders) => boolean,
+): Promise<boolean> {
+  const uids = [...new Set(candidates)].sort((a, b) => b - a).slice(0, MAX_VERIFY).sort((a, b) => a - b);
+  for (let i = 0; i < uids.length; i += VERIFY_CHUNK) {
+    const rows = await s.client.uidFetch(toUidSet(uids.slice(i, i + VERIFY_CHUNK)), { headerFields: fields });
+    for (const r of rows) if (exact(await parseHeaders(r))) return true;
+  }
+  return false;
+}
 
 export interface HandledOptions {
   /** Message-ID recorded by the caller from list-new; needed once the UID has left the Inbox. */
@@ -36,14 +55,20 @@ export async function handledCheck(s: Session, uid: number, opts: HandledOptions
         b: { kind: "header", name: "References", value: messageId },
       } satisfies SearchCriterion,
     );
-    sentReply = hits.length > 0;
+    // IMAP HEADER search is a case-insensitive substring match; confirm exact identifier tokens.
+    sentReply = await anyExact(
+      s,
+      hits,
+      ["In-Reply-To", "References"],
+      (h) => h.inReplyTo === messageId || h.references.includes(messageId),
+    );
   }
 
   let foundInArchive: boolean | null = null;
   if (!inInbox && messageId && s.folders.archive) {
     await s.client.examine(s.folders.archive);
-    foundInArchive =
-      (await s.client.uidSearch({ kind: "header", name: "Message-ID", value: messageId })).length > 0;
+    const hits = await s.client.uidSearch({ kind: "header", name: "Message-ID", value: messageId });
+    foundInArchive = await anyExact(s, hits, ["Message-ID"], (h) => h.messageId === messageId);
   }
 
   const movedOutOfInbox = !inInbox;

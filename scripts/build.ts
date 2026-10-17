@@ -19,8 +19,12 @@ export function resolveBuildConfig(env: (k: string) => string | undefined) {
   const mailbox = env("MAILBOX_ADDRESS") ?? "";
   if (!validAddress(mailbox)) throw new Error("MAILBOX_ADDRESS is not a valid address");
   const scratchDir = (env("SCRATCH_DIR") ?? "").replace(/\/+$/, "");
-  if (!SAFE_PATH.test(scratchDir) || scratchDir === "" || scratchDir.includes("..")) {
-    throw new Error("SCRATCH_DIR must be an absolute path using only [A-Za-z0-9._/+@-], without '..'");
+  // Empty, "." and ".." segments would normalise to a different directory (e.g. "/." is the root).
+  const badSegment = scratchDir.split("/").slice(1).some((s) => s === "" || s === "." || s === "..");
+  if (!SAFE_PATH.test(scratchDir) || scratchDir === "" || scratchDir.includes("..") || badSegment) {
+    throw new Error(
+      "SCRATCH_DIR must be an absolute path using only [A-Za-z0-9._/+@-], without '..', '.' or empty segments",
+    );
   }
   const overrides: Record<string, string> = {};
   for (

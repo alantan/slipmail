@@ -25,6 +25,8 @@ export interface FakeServerOptions {
   folders: FakeFolder[];
   capabilities?: string[];
   /** How EXAMINE/SELECT reports UIDVALIDITY/UIDNEXT. Default "untagged". */
+  /** Emit unsolicited FETCH updates and split each response into fragments. */
+  interleaveFetch?: boolean;
   examineStyle?: "untagged" | "tagged-only" | "no-uidnext";
 }
 
@@ -107,7 +109,13 @@ export class FakeImapServer {
   private async session(conn: Deno.Conn) {
     const caps = this.opts.capabilities ?? ["IMAP4rev1", "SPECIAL-USE", "UIDPLUS", "ID", "AUTH=PLAIN"];
     let buf = new Uint8Array(0);
-    const send = (s: string | Uint8Array) => conn.write(typeof s === "string" ? enc.encode(s) : s);
+    // conn.write may accept only a prefix of the buffer, so loop until everything is written.
+    const send = async (s: string | Uint8Array) => {
+      const data = typeof s === "string" ? enc.encode(s) : s;
+      let off = 0;
+      while (off < data.length) off += await conn.write(data.subarray(off));
+      return off;
+    };
     const readMore = async (): Promise<boolean> => {
       const chunk = new Uint8Array(65536);
       const n = await conn.read(chunk);
@@ -201,7 +209,9 @@ export class FakeImapServer {
             await send("+ \r\n");
             ir = (await readLine()) ?? "";
           }
-          const [, u, p] = atob(ir).split("\u0000");
+          // atob yields a binary string; the client sends UTF-8 bytes, so decode bytes as UTF-8.
+          const bytes = Uint8Array.from(atob(ir), (c) => c.charCodeAt(0));
+          const [, u, p] = dec.decode(bytes).split("\u0000");
           if (u === this.opts.user && p === this.opts.password) {
             authed = true;
             await ok("AUTHENTICATE completed");
@@ -371,6 +381,14 @@ export class FakeImapServer {
           const label = `BODY[${section}]`;
           parts.push(label + ` {${bytes.length}}\r\n`, bytes);
         }
+      }
+      if (this.opts.interleaveFetch) {
+        // An unsolicited flags update for a different message, then a flags-only fragment for this one.
+        const other = folder.messages.find((x) => x.uid !== m.uid);
+        if (other) {
+          await send(`* ${folder.messages.indexOf(other) + 1} FETCH (UID ${other.uid} FLAGS (\\Seen))\r\n`);
+        }
+        await send(`* ${seq} FETCH (UID ${m.uid} FLAGS (${m.flags.join(" ")}))\r\n`);
       }
       const out: Array<string | Uint8Array> = [`* ${seq} FETCH (`];
       parts.forEach((p, i) => {

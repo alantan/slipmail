@@ -45,19 +45,25 @@ export class WireReader {
     private timeoutMs: number,
   ) {}
 
-  private async fill(): Promise<void> {
-    const chunk = new Uint8Array(65536);
+  /** One read into `target`, bounded by the per-read timeout. */
+  private async readInto(target: Uint8Array): Promise<number> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, rej) => {
       timer = setTimeout(() => rej(new ProtocolError("timed out waiting for server")), this.timeoutMs);
     });
     let n: number | null;
     try {
-      n = await Promise.race([this.conn.read(chunk), timeout]);
+      n = await Promise.race([this.conn.read(target), timeout]);
     } finally {
       clearTimeout(timer);
     }
     if (n === null) throw new ProtocolError("connection closed by server");
+    return n;
+  }
+
+  private async fill(): Promise<void> {
+    const chunk = new Uint8Array(65536);
+    const n = await this.readInto(chunk);
     const merged = new Uint8Array(this.buf.length + n);
     merged.set(this.buf);
     merged.set(chunk.subarray(0, n), this.buf.length);
@@ -82,9 +88,13 @@ export class WireReader {
   }
 
   async readExact(n: number): Promise<Uint8Array> {
-    while (this.buf.length < n) await this.fill();
-    const out = this.buf.slice(0, n);
-    this.buf = this.buf.subarray(n);
+    // Allocate once and read straight into the result: linear in n (no repeated re-copying).
+    const out = new Uint8Array(n);
+    const have = Math.min(this.buf.length, n);
+    out.set(this.buf.subarray(0, have));
+    this.buf = this.buf.subarray(have);
+    let filled = have;
+    while (filled < n) filled += await this.readInto(out.subarray(filled));
     return out;
   }
 }

@@ -46,7 +46,8 @@ export function validMessageId(s: string | null | undefined): s is string {
 }
 
 export function addr(a: { name?: string; address?: string } | undefined): Address | null {
-  if (!a?.address) return null;
+  // Never truncate an address: a clipped one could become a different, valid-looking address.
+  if (!a?.address || a.address.length > 254) return null;
   return { name: clean(a.name, 120), address: clean(a.address, 254) };
 }
 

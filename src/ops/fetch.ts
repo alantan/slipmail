@@ -13,11 +13,53 @@ export interface AttachmentInfo {
   skippedReason?: string;
 }
 
-function htmlToText(html: string): string {
-  return html
-    .replace(/<(script|style|head)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>|<\/(p|div|tr|li|h[1-6])>/gi, "\n")
-    .replace(/<[^>]*>/g, "")
+const DROP_BLOCKS = new Set(["script", "style", "head"]);
+const BREAK_TAGS = new Set(["br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6"]);
+
+/**
+ * Single left-to-right pass: every index search resumes after the previous match, and an
+ * unterminated construct ends the scan, so work is linear even for adversarial input.
+ */
+export function htmlToText(html: string): string {
+  const lower = html.toLowerCase();
+  let out = "";
+  let i = 0;
+  while (i < html.length) {
+    const lt = html.indexOf("<", i);
+    if (lt < 0) {
+      out += html.slice(i);
+      break;
+    }
+    out += html.slice(i, lt);
+    if (lower.startsWith("<!--", lt)) {
+      const end = lower.indexOf("-->", lt + 4);
+      if (end < 0) break;
+      i = end + 3;
+      continue;
+    }
+    const m = /^<(\/?)([a-z][a-z0-9]*)/.exec(lower.slice(lt, lt + 16));
+    if (!m && !/^<[!?]/.test(lower.slice(lt, lt + 2))) {
+      out += "<"; // a literal "<" (e.g. "a < b")
+      i = lt + 1;
+      continue;
+    }
+    const closing = m?.[1] === "/";
+    const name = m?.[2] ?? "";
+    if (!closing && DROP_BLOCKS.has(name)) {
+      const close = lower.indexOf(`</${name}`, lt + 1);
+      if (close < 0) break; // unterminated: drop the rest
+      const end = html.indexOf(">", close);
+      if (end < 0) break;
+      out += " ";
+      i = end + 1;
+      continue;
+    }
+    const end = html.indexOf(">", lt + 1);
+    if (end < 0) break;
+    if (BREAK_TAGS.has(name) && (name === "br" || closing)) out += "\n";
+    i = end + 1;
+  }
+  return out
     .replace(/&nbsp;/g, " ")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
