@@ -185,3 +185,12 @@ Deno.test("uidFetch: merges interleaved fragments by UID and returns only reques
     await h.close();
   }
 });
+
+Deno.test("htmlToText: non-ASCII characters whose lowercase changes length do not shift offsets", () => {
+  assertEquals(
+    htmlToText("İ<script>hidden()</script><p>Visible</p>").trim(),
+    "İ  Visible".replace("  ", " "),
+  );
+  assertEquals(htmlToText("İİİ<SCRIPT>x</SCRIPT>after").includes("x"), false);
+  assertEquals(htmlToText("İ<b>bold</b>"), "İbold");
+});

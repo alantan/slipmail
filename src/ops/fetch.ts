@@ -21,7 +21,9 @@ const BREAK_TAGS = new Set(["br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4"
  * unterminated construct ends the scan, so work is linear even for adversarial input.
  */
 export function htmlToText(html: string): string {
-  const lower = html.toLowerCase();
+  // ASCII-only lowercase: String.toLowerCase() can change the length ("İ" -> 2 code units), which
+  // would shift every offset taken from `lower` relative to `html`.
+  const lower = html.replace(/[A-Z]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 32));
   let out = "";
   let i = 0;
   while (i < html.length) {
