@@ -63,7 +63,7 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
       case "list-new": {
         const p = parseArgs(rest, ["--after-uid"]);
         const v = p.flags.get("--after-uid");
-        if (p.pos.length || v === undefined || !/^\d{1,10}$/.test(v)) {
+        if (p.pos.length || v === undefined || !/^\d{1,10}$/.test(v) || Number(v) > 0xffffffff) {
           throw new OpError("usage", "list-new requires --after-uid N (0 or greater)");
         }
         const s = await openSession(config, deps.secrets);

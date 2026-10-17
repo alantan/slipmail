@@ -85,9 +85,16 @@ const UID_SET = /^\d+(:(\d+|\*))?(,\d+(:(\d+|\*))?)*$/;
 const HEADER_NAME = /^[A-Za-z][A-Za-z0-9-]{0,63}$/;
 const PRINTABLE_ASCII = /^[\x21\x23-\x5b\x5d-\x7e]+$/; // printable, no space, quote or backslash
 
+interface RunOpts {
+  onUntagged?: (kind: string, num: number | undefined, p: ResponseParser) => Promise<void>;
+  onStatus?: (text: string) => void;
+  continuation?: () => string | Uint8Array;
+}
+
 export class ImapClient {
   capabilities = new Set<string>();
   private tag = 0;
+  private broken = false;
   private reader: WireReader;
   private maxLiteral: number;
 
@@ -136,6 +143,13 @@ export class ImapClient {
     } else if (this.capabilities.has("LOGINDISABLED")) {
       throw new ImapCommandError("NO", "server offers no usable login mechanism");
     } else {
+      // quoteString cannot carry non-ASCII, and LOGIN literals are not implemented.
+      if (/[^\x20-\x7e]/.test(user + password)) {
+        throw new ImapCommandError(
+          "NO",
+          "server lacks AUTH=PLAIN; non-ASCII credentials are not supported over LOGIN",
+        );
+      }
       await this.run("LOGIN", `${quoteString(user)} ${quoteString(password)}`);
     }
     await this.refreshCapabilities();
@@ -236,22 +250,27 @@ export class ImapClient {
 
   async logout(): Promise<void> {
     try {
-      await this.run("LOGOUT", "");
+      // After a transport/protocol failure the stream state is unknown: just close, don't wait again.
+      if (!this.broken) await this.run("LOGOUT", "");
     } catch { /* server may close first */ }
     try {
       this.conn.close();
     } catch { /* already closed */ }
   }
 
-  private async run(
-    verb: string,
-    args: string,
-    opts: {
-      onUntagged?: (kind: string, num: number | undefined, p: ResponseParser) => Promise<void>;
-      onStatus?: (text: string) => void;
-      continuation?: () => string | Uint8Array;
-    } = {},
-  ): Promise<void> {
+  private async run(verb: string, args: string, opts: RunOpts = {}): Promise<void> {
+    try {
+      await this.runInner(verb, args, opts);
+    } catch (e) {
+      // A server NO/BAD leaves the stream usable; anything else (timeout, EOF, bad framing) does not.
+      if (!(e instanceof ImapCommandError)) {
+        this.broken = true;
+      }
+      throw e;
+    }
+  }
+
+  private async runInner(verb: string, args: string, opts: RunOpts): Promise<void> {
     if (!ALLOWED_COMMANDS.has(verb)) throw new ProtocolError(`command not permitted: ${verb}`);
     const tag = `s${++this.tag}`;
     await this.conn.write(new TextEncoder().encode(`${tag} ${verb}${args ? " " + args : ""}\r\n`));

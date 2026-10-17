@@ -74,6 +74,8 @@ export async function fetchMessage(s: Session, uid: number) {
     const safe = sanitizeFilename(a.filename, `attachment-${i + 1}`);
     const bytes = a.content instanceof ArrayBuffer
       ? new Uint8Array(a.content)
+      : ArrayBuffer.isView(a.content)
+      ? new Uint8Array(a.content.buffer, a.content.byteOffset, a.content.byteLength)
       : new TextEncoder().encode(String(a.content));
     const size = bytes.byteLength;
     const entry: AttachmentInfo = {

@@ -16,8 +16,9 @@ export async function saveDraft(s: Session, uid: number, body: string) {
   const h = await parseHeaders(row);
 
   // The recipient comes only from the original message: Reply-To, else From. Never from the caller.
-  const to = (h.replyTo[0] ?? h.from)?.address;
-  if (!to || !validAddress(to)) {
+  // The first usable address wins; an unparseable Reply-To entry does not block a valid later one or From.
+  const to = [...h.replyTo, ...(h.from ? [h.from] : [])].map((a) => a.address).find(validAddress);
+  if (!to) {
     throw new OpError("bad_recipient", "original message has no usable Reply-To/From address");
   }
   if (!h.messageId) {

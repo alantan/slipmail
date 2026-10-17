@@ -29,7 +29,8 @@ export interface ParsedHeaders {
   references: string[];
 }
 
-const MSGID = /^<[^\s<>"\\]{1,200}>$/;
+// Printable ASCII only (no space, quote, backslash, angle brackets inside): safe to place in an IMAP SEARCH.
+const MSGID = /^<[\x21\x23-\x3b\x3d\x3f-\x5b\x5d-\x7e]{1,200}>$/;
 
 /** Strip control and bidi/format characters and cap the length. Used on every echoed string. */
 export function clean(s: string | undefined | null, max = 300): string {
