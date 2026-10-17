@@ -1,0 +1,6 @@
+dist/
+.scratch/
+*.log
+.DS_Store
+node_modules/
+tests/.tmp/
