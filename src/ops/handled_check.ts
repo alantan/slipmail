@@ -1,5 +1,5 @@
 import { type ParsedHeaders, parseHeaders, validMessageId } from "../headers.ts";
-import { type FetchResult, parseInternalDate, type SearchCriterion } from "../imap/client.ts";
+import { parseInternalDate, type SearchCriterion } from "../imap/client.ts";
 import { toUidSet } from "./list_new.ts";
 import { OpError, type Session } from "../session.ts";
 
@@ -11,16 +11,12 @@ async function anyExact(
   s: Session,
   candidates: number[],
   fields: string[],
-  exact: (h: ParsedHeaders, r: FetchResult) => boolean,
-  internalDate = false,
+  exact: (h: ParsedHeaders) => boolean,
 ): Promise<boolean> {
   const uids = [...new Set(candidates)].sort((a, b) => b - a).slice(0, MAX_VERIFY).sort((a, b) => a - b);
   for (let i = 0; i < uids.length; i += VERIFY_CHUNK) {
-    const rows = await s.client.uidFetch(toUidSet(uids.slice(i, i + VERIFY_CHUNK)), {
-      headerFields: fields,
-      internalDate,
-    });
-    for (const r of rows) if (exact(await parseHeaders(r), r)) return true;
+    const rows = await s.client.uidFetch(toUidSet(uids.slice(i, i + VERIFY_CHUNK)), { headerFields: fields });
+    for (const r of rows) if (exact(await parseHeaders(r))) return true;
   }
   return false;
 }
@@ -28,7 +24,10 @@ async function anyExact(
 /** Subject without leading reply/forward prefixes, whitespace-collapsed and lower-cased. */
 export function baseSubject(subject: string): string {
   // Capped well below clean()'s 300 characters: a "Re: " prefix can push the end of a long subject past it.
-  return subject.replace(/^(\s*(re|fwd?)\s*:)+/i, "").replace(/\s+/g, " ").trim().toLowerCase().slice(0, 200);
+  const base = subject.replace(/^(\s*(re|fwd?)\s*:)+/i, "").replace(/\s+/g, " ").trim().toLowerCase();
+  if (base.length <= 200) return base;
+  const hi = base.charCodeAt(199); // do not leave half of a surrogate pair at the cut
+  return base.slice(0, hi >= 0xd800 && hi <= 0xdbff ? 199 : 200);
 }
 
 const REPLY_PREFIX = /^\s*re\s*:/i;
@@ -134,27 +133,29 @@ async function sentReplyByContent(
   if (!sentExamined) await s.client.examine(s.folders.sent);
   // SINCE ignores the time of day and timezone, so start a day early and compare exactly afterwards.
   const hits = await s.client.uidSearch({ kind: "since", day: new Date(receivedAt - DAY_MS) });
-  // Newest first, and stop as soon as a chunk reaches messages older than the original: a reply can only
+  // Newest first, and stop once a whole chunk is older than the original: a reply can only
   // be newer, so everything beyond that point is irrelevant. Bounded at MAX_FALLBACK_SCAN messages.
   const uids = [...new Set(hits)].sort((x, y) => y - x).slice(0, MAX_FALLBACK_SCAN);
   for (let i = 0; i < uids.length; i += VERIFY_CHUNK) {
-    const rows = await s.client.uidFetch(toUidSet(uids.slice(i, i + VERIFY_CHUNK)), {
+    const chunk = uids.slice(i, i + VERIFY_CHUNK).sort((x, y) => x - y); // ascending, so toUidSet can compact
+    const rows = await s.client.uidFetch(toUidSet(chunk), {
       headerFields: ["Subject", "To", "Cc"],
       internalDate: true,
     });
-    let reachedOlder = false;
+    let older = 0;
     for (const r of rows) {
       const sentAt = parseInternalDate(r.internalDate);
       if (sentAt === null) continue;
       if (sentAt < receivedAt) {
-        reachedOlder = true;
+        older++;
         continue;
       }
       const h = await parseHeaders(r);
       if (h.truncated || !REPLY_PREFIX.test(h.subject) || baseSubject(h.subject) !== subject) continue;
       if (h.recipients.some((a) => senders.has(a))) return true;
     }
-    if (reachedOlder) break;
+    // INTERNALDATE need not be monotonic in UID, so one old message is not enough: the whole chunk must be old.
+    if (rows.length > 0 && older === rows.length) break;
   }
   return false;
 }

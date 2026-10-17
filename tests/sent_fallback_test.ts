@@ -235,3 +235,42 @@ Deno.test("sent fallback: finds the reply even when more than 100 later messages
   const { r } = await check([original()], [sentCopy(), ...later]);
   assertEquals(r.sentReply, true);
 });
+
+Deno.test("sent fallback: a message sent at exactly the original's INTERNALDATE counts", async () => {
+  const { r } = await check([original()], [sentCopy({}, RECEIVED)]);
+  assertEquals(r.sentReply, true);
+});
+
+Deno.test("sent fallback: any of several Reply-To addresses can be the recipient", async () => {
+  const msg = original({ "Reply-To": "first@example.com, desk@example.com" });
+  const { r } = await check([msg], [sentCopy({ To: "desk@example.com" })]);
+  assertEquals(r.sentReply, true);
+});
+
+Deno.test("sent fallback: one older message with a higher UID does not end the scan early", async () => {
+  const later = (i: number) =>
+    sentCopy({ Subject: `Unrelated ${i}`, To: "dave@example.com" }, "17-Oct-2026 11:00:00 +0000");
+  const sent: Msg[] = [
+    sentCopy(), // uid 1: the reply
+    ...Array.from({ length: 49 }, (_, i) => later(i)),
+    sentCopy({ Subject: "Unrelated old", To: "dave@example.com" }, "17-Oct-2026 09:00:00 +0000"), // uid 51
+  ];
+  const { r } = await check([original()], sent);
+  assertEquals(r.sentReply, true);
+});
+
+Deno.test("sent fallback: stops fetching once a whole chunk is older than the original", async () => {
+  const old = Array.from(
+    { length: 200 },
+    (_, i) => sentCopy({ Subject: `Unrelated ${i}`, To: "dave@example.com" }, "17-Oct-2026 09:00:00 +0000"),
+  );
+  const { r, log } = await check([original()], old);
+  assertEquals(r.sentReply, false);
+  // One fetch for the Inbox message plus a single 50-message chunk of Sent, not four chunks.
+  assertEquals(log.filter((v) => v === "UID FETCH").length, 2);
+});
+
+Deno.test("baseSubject: truncation never leaves half a surrogate pair", () => {
+  const s = "a".repeat(199) + "😀";
+  assertEquals(baseSubject(s), "a".repeat(199));
+});
