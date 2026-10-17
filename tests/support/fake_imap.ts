@@ -29,6 +29,8 @@ export interface FakeServerOptions {
   interleaveFetch?: boolean;
   /** Greet with PREAUTH (already authenticated) and reject any LOGIN/AUTHENTICATE. */
   preauth?: boolean;
+  /** Send a second, unsolicited continuation request after the first one for a literal. */
+  extraContinuation?: boolean;
   examineStyle?: "untagged" | "tagged-only" | "no-uidnext";
 }
 
@@ -168,6 +170,7 @@ export class FakeImapServer {
         const m: RegExpMatchArray | null = line.match(/\{(\d+)\}$/);
         if (!m) break;
         await send("+ go ahead\r\n");
+        if (this.opts.extraContinuation) await send("+ again\r\n");
         const lit = await readBytes(Number(m[1]));
         if (lit === null) return;
         literals.push(lit);

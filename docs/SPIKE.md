@@ -22,7 +22,7 @@ Tested with Deno 2.9.7, imapflow 1.0.198, against a local fake IMAP-over-TLS ser
 
 `src/imap/` is a small client over `Deno.connectTls` that needs only the net permission. It has a single send
 choke point with a command allow-list
-(`CAPABILITY ID LOGIN LIST SELECT EXAMINE
-UID FETCH UID SEARCH APPEND LOGOUT`) so
-STORE/EXPUNGE/COPY/MOVE/DELETE cannot be issued even by a bug elsewhere. MIME parsing uses `npm:postal-mime`
-(pure JS; verified to need no permissions).
+(`CAPABILITY AUTHENTICATE LOGIN LIST EXAMINE
+UID FETCH UID SEARCH APPEND LOGOUT`; no `SELECT`, so folders are
+only ever opened read-only) so STORE/EXPUNGE/COPY/MOVE/DELETE cannot be issued even by a bug elsewhere. MIME
+parsing uses `npm:postal-mime` (pure JS; verified to need no permissions).

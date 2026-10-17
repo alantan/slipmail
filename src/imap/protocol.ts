@@ -57,7 +57,7 @@ export class WireReader {
     } finally {
       clearTimeout(timer);
     }
-    if (n === null) throw new ProtocolError("connection closed by server");
+    if (n === null || n === 0) throw new ProtocolError("connection closed by server");
     return n;
   }
 
@@ -139,7 +139,7 @@ export class ResponseParser {
     while (this.pos < this.line.length) {
       const ch = this.line[this.pos];
       if (ch === "[") depth++;
-      if (ch === "]") depth--;
+      if (ch === "]") depth = Math.max(0, depth - 1);
       if (depth <= 0 && (ch === " " || ch === "(" || ch === ")")) break;
       v += ch;
       this.pos++;

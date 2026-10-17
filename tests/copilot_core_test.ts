@@ -1,13 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { writeAll } from "../src/imap/client.ts";
 import { WireReader } from "../src/imap/protocol.ts";
-import { parseHeaders } from "../src/headers.ts";
+import { clean, parseHeaders } from "../src/headers.ts";
 import { htmlToText } from "../src/ops/fetch.ts";
 import { handledCheck } from "../src/ops/handled_check.ts";
 import { saveDraft } from "../src/ops/save_draft.ts";
 import { makeFolder } from "./support/fake_imap.ts";
 import { makeCtx } from "./support/ctx.ts";
-import { rfc822, startHarness } from "./support/harness.ts";
+import { PASSWORD, rfc822, startHarness, USER } from "./support/harness.ts";
 
 const enc = new TextEncoder();
 
@@ -212,6 +212,39 @@ Deno.test("writeAll: a zero-byte write fails instead of spinning", async () => {
   let threw = false;
   try {
     await writeAll({ write: () => Promise.resolve(0) }, new Uint8Array([1, 2, 3]));
+  } catch {
+    threw = true;
+  }
+  assertEquals(threw, true);
+});
+
+Deno.test("appendDraft: a repeated continuation request is refused, not answered with the payload again", async () => {
+  const h = await startHarness(undefined, { extraContinuation: true });
+  try {
+    const c = await h.connect();
+    await c.login(USER, PASSWORD);
+    let msg = "";
+    try {
+      await c.appendDraft("Drafts", new TextEncoder().encode("Subject: x\r\n\r\nbody\r\n"));
+    } catch (e) {
+      msg = (e as Error).message;
+    }
+    assertEquals(msg, "unexpected continuation request");
+  } finally {
+    await h.close();
+  }
+});
+
+Deno.test("clean: truncation never leaves half a surrogate pair", () => {
+  const s = "a".repeat(9) + "😀";
+  assertEquals(clean(s, 10), "a".repeat(9));
+});
+
+Deno.test("WireReader: a zero-byte read is treated as closed, not spun on", async () => {
+  const r = new WireReader({ read: () => Promise.resolve(0) }, 1000);
+  let threw = false;
+  try {
+    await r.readLine();
   } catch {
     threw = true;
   }

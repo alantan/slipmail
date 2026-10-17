@@ -41,7 +41,10 @@ export function clean(s: string | undefined | null, max = 300): string {
   // deno-lint-ignore no-control-regex
   const t = s.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, " ")
     .trim();
-  return t.length > max ? t.slice(0, max) : t;
+  if (t.length <= max) return t;
+  // Do not leave half of a surrogate pair at the cut.
+  const hi = t.charCodeAt(max - 1);
+  return t.slice(0, hi >= 0xd800 && hi <= 0xdbff ? max - 1 : max);
 }
 
 export function validMessageId(s: string | null | undefined): s is string {
