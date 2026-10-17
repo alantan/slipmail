@@ -393,7 +393,7 @@ export class FakeImapServer {
         else if (u === "FLAGS") parts.push(`FLAGS (${m.flags.join(" ")})`);
         else if (u === "RFC822.SIZE") parts.push(`RFC822.SIZE ${enc.encode(m.raw).length}`);
         else if (u === "INTERNALDATE") {
-          parts.push(`INTERNALDATE "${m.internalDate ?? "17-Oct-2026 10:00:00 +0000"}"`);
+          parts.push(`INTERNALDATE "${m.internalDate ?? DEFAULT_INTERNAL_DATE}"`);
         } else if (u === "ENVELOPE") parts.push(`ENVELOPE ${envelope(m.raw)}`);
         else if (u.startsWith("BODY.PEEK[") || u.startsWith("BODY[")) {
           const section = it.slice(it.indexOf("[") + 1, it.lastIndexOf("]"));
@@ -581,6 +581,9 @@ function maxUidOf(folder: FakeFolder): number {
   return max;
 }
 
+const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+const DEFAULT_INTERNAL_DATE = "17-Oct-2026 10:00:00 +0000";
+
 function matches(m: FakeMessage, seq: number, folder: FakeFolder, toks: Tok[]): boolean {
   // Consumes tokens left to right; all top-level criteria are ANDed.
   const next = (): boolean => {
@@ -610,6 +613,16 @@ function matches(m: FakeMessage, seq: number, folder: FakeFolder, toks: Tok[]): 
         const set = String(toks.shift());
         const max = maxUidOf(folder);
         return parseSet(set, max).some(([lo, hi]) => m.uid >= lo && m.uid <= hi);
+      }
+      case "SINCE": {
+        const day = (v: string) => {
+          const p = /^(\d{1,2})-([A-Za-z]{3})-(\d{4})/.exec(v);
+          if (!p) return NaN;
+          const mon = MONTHS.indexOf(p[2].toLowerCase());
+          return Date.UTC(Number(p[3]), mon, Number(p[1]));
+        };
+        // Like a real server: compare calendar days only, ignoring time of day and zone.
+        return day(m.internalDate ?? DEFAULT_INTERNAL_DATE) >= day(String(toks.shift()));
       }
       case "HEADER": {
         const name = String(toks.shift()).toLowerCase();

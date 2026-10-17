@@ -81,6 +81,7 @@ export type SearchCriterion =
   | { kind: "header"; name: string; value: string }
   | { kind: "uid"; set: string }
   | { kind: "or"; a: SearchCriterion; b: SearchCriterion }
+  | { kind: "since"; day: Date } // INTERNALDATE on or after this (UTC) calendar day
   | { kind: "last" } // the message with the highest sequence number (and so the highest UID)
   | { kind: "all" };
 
@@ -394,12 +395,30 @@ function toBytes(n: Node): Uint8Array {
   return new TextEncoder().encode(nodeStr(n) ?? "");
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Parses an IMAP INTERNALDATE ("17-Oct-2026 10:00:00 +0000") to epoch ms, or null if malformed. */
+export function parseInternalDate(s: string | undefined): number | null {
+  const m = /^\s*(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})\s*$/.exec(
+    s ?? "",
+  );
+  if (!m) return null;
+  const mon = MONTHS.findIndex((x) => x.toLowerCase() === m[2].toLowerCase());
+  if (mon < 0) return null;
+  const offset = (m[7] === "-" ? -1 : 1) * (Number(m[8]) * 60 + Number(m[9])) * 60_000;
+  return Date.UTC(Number(m[3]), mon, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6])) - offset;
+}
+
 function renderCriterion(c: SearchCriterion): string {
   switch (c.kind) {
     case "all":
       return "ALL";
     case "last":
       return "*";
+    case "since": {
+      if (Number.isNaN(c.day.getTime())) throw new ProtocolError("invalid SINCE date");
+      return `SINCE ${c.day.getUTCDate()}-${MONTHS[c.day.getUTCMonth()]}-${c.day.getUTCFullYear()}`;
+    }
     case "uid":
       if (!UID_SET.test(c.set)) throw new ProtocolError("invalid UID set");
       return `UID ${c.set}`;
