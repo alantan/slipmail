@@ -1,7 +1,7 @@
 // Construction of the outgoing draft. Every header value is validated or encoded so that
 // hostile input from the original message cannot inject headers or extra recipients.
 
-import { textToHtml } from "./html_out.ts";
+import { stripBold, textToHtml } from "./html_out.ts";
 
 const ADDR = /^[A-Za-z0-9][A-Za-z0-9._%+'=-]{0,63}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 
@@ -74,7 +74,9 @@ export function buildDraft(p: DraftParts): Uint8Array {
   if (!validAddress(p.from) || !validAddress(p.to)) throw new Error("invalid address");
   const date = (p.now ?? new Date()).toUTCString().replace("GMT", "+0000");
   const messageId = `<${crypto.randomUUID()}@${p.idDomain}>`;
-  const text = p.body.replace(/\r\n|\r|\n/g, "\r\n");
+  // The plain part loses the **bold** markers; the HTML part is built from the original text.
+  const lines = p.body.split(/\r\n|\r|\n/);
+  const text = lines.map(stripBold).join("\r\n");
   const boundary = `slipmail-${crypto.randomUUID()}`;
   const part = (type: string, content: string) =>
     [
@@ -96,8 +98,9 @@ export function buildDraft(p: DraftParts): Uint8Array {
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];
-  const body = [part("text/plain", text), part("text/html", textToHtml(text)), `--${boundary}--`].join(
-    "\r\n",
-  );
+  const body = [part("text/plain", text), part("text/html", textToHtml(lines.join("\n"))), `--${boundary}--`]
+    .join(
+      "\r\n",
+    );
   return new TextEncoder().encode(headers.join("\r\n") + "\r\n\r\n" + body + "\r\n");
 }

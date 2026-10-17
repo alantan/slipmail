@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { escapeHtml, textToHtml } from "../src/html_out.ts";
+import { escapeHtml, stripBold, textToHtml } from "../src/html_out.ts";
 import { buildDraft } from "../src/mime_out.ts";
 import { saveDraft } from "../src/ops/save_draft.ts";
 import { OpError, type Session } from "../src/session.ts";
@@ -64,6 +64,105 @@ Deno.test("html: pathological quote nesting is bounded and does not overflow the
 Deno.test("html: a bare quote marker produces no empty blockquote", () => {
   assertEquals(textToHtml(">\n\nhi"), wrap(`<p ${P}>hi</p>`));
   assertEquals(textToHtml("> \n>"), wrap(""));
+});
+
+// ---------------------------------------------------------------- bold
+
+const S = (t: string) => `<strong>${t}</strong>`;
+
+Deno.test("bold: **x** pairs on one line become <strong>, in place", () => {
+  assertEquals(textToHtml("**Alan Tanaman**"), wrap(`<p ${P}>${S("Alan Tanaman")}</p>`));
+  assertEquals(textToHtml("a **b** c **d** e"), wrap(`<p ${P}>a ${S("b")} c ${S("d")} e</p>`));
+  assertEquals(textToHtml("**Alan**\nExample Co"), wrap(`<p ${P}>${S("Alan")}<br>Example Co</p>`));
+  assertEquals(textToHtml("  **x**"), wrap(`<p ${P}>&nbsp;&nbsp;${S("x")}</p>`));
+});
+
+Deno.test("bold: works inside quoted lines", () => {
+  assertEquals(
+    textToHtml("> **Quoted** name"),
+    wrap(`<blockquote ${Q}><p ${P}>${S("Quoted")} name</p></blockquote>`),
+  );
+  assertEquals(
+    textToHtml(">> **deep**"),
+    wrap(`<blockquote ${Q}><blockquote ${Q}><p ${P}>${S("deep")}</p></blockquote></blockquote>`),
+  );
+});
+
+Deno.test("bold: unmatched, empty and line-spanning markers stay literal", () => {
+  assertEquals(textToHtml("a ** b"), wrap(`<p ${P}>a ** b</p>`));
+  assertEquals(textToHtml("****"), wrap(`<p ${P}>****</p>`));
+  assertEquals(textToHtml("a **b\nc** d"), wrap(`<p ${P}>a **b<br>c** d</p>`));
+  assertEquals(textToHtml("**a**b**c"), wrap(`<p ${P}>${S("a")}b**c</p>`));
+});
+
+Deno.test("bold: no nesting and no other markup", () => {
+  assertEquals(textToHtml("**a *b* c**"), wrap(`<p ${P}>${S("a *b* c")}</p>`));
+  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<p ${P}>*i* _i_ [l](http://x)</p>`));
+  assertEquals(textToHtml("**a **b** c**"), wrap(`<p ${P}>${S("a ")}b${S(" c")}</p>`));
+});
+
+Deno.test("bold: bold text cannot smuggle tags or attributes", () => {
+  for (
+    const t of [
+      "**<b onclick=x>**",
+      "**a**<script>alert(1)</script>",
+      '**"><img src=x onerror=1>**',
+      "**&lt;b&gt;**",
+    ]
+  ) {
+    const html = textToHtml(t);
+    const tags = (html.match(/<[^>]*>/g) ?? []).map((x) => x.replace(/ .*/, "").replace(/>$/, ""));
+    for (const x of tags) {
+      assert(
+        [
+          "<!DOCTYPE",
+          "<html",
+          "<head",
+          "<meta",
+          "</head",
+          "<body",
+          "</body",
+          "</html",
+          "<p",
+          "</p",
+          "<strong",
+          "</strong",
+        ]
+          .includes(x),
+        `unexpected tag ${x} for ${t}`,
+      );
+    }
+    assert(!/<script|<img|<b /i.test(html), t);
+  }
+  assertEquals(textToHtml("**<b onclick=x>**"), wrap(`<p ${P}>${S("&lt;b onclick=x&gt;")}</p>`));
+  assertEquals(textToHtml("**a**<script>"), wrap(`<p ${P}>${S("a")}&lt;script&gt;</p>`));
+  assertEquals(textToHtml("**&lt;b&gt;**"), wrap(`<p ${P}>${S("&amp;lt;b&amp;gt;")}</p>`));
+});
+
+Deno.test("bold: stripBold removes markers exactly where the HTML makes bold", () => {
+  assertEquals(stripBold("**Alan Tanaman**"), "Alan Tanaman");
+  assertEquals(stripBold("a **b** c"), "a b c");
+  assertEquals(stripBold("a ** d"), "a ** d");
+  assertEquals(stripBold("****"), "****");
+  assertEquals(stripBold("> **q**"), "> q");
+});
+
+Deno.test("bold: very long runs and many pairs stay linear", () => {
+  const cases = [
+    "**" + "a".repeat(500_000) + "**",
+    "**a** ".repeat(10_000),
+    "** ".repeat(50_000), // many unmatched-looking openers
+    "**a".repeat(100_000), // never closed
+    "*".repeat(200_000),
+    "**a*".repeat(50_000),
+  ];
+  for (const c of cases) {
+    const t0 = performance.now();
+    textToHtml(c);
+    stripBold(c);
+    assert(performance.now() - t0 < 1000, `slow on input of length ${c.length}`);
+  }
+  assertEquals(textToHtml("**a** ".repeat(10_000)).match(/<strong>/g)!.length, 10_000);
 });
 
 Deno.test("html: a block that mixes quoted and unquoted lines is an escaped paragraph", () => {
@@ -142,6 +241,15 @@ Deno.test("draft: multipart/alternative with an unchanged text/plain part and a 
   assertEquals(parts["text/html"], textToHtml(body));
   assert(parts["text/html"].includes("☃"));
   assert([...raw].every((c) => c.charCodeAt(0) < 0x80), "everything on the wire is 7-bit");
+});
+
+Deno.test("draft: the plain part has the ** markers removed, the HTML part has <strong>", () => {
+  const parts = draftParts(build("Thanks,\n\n**Alan Tanaman**\nExample Co\n\nkeep ** this\n> **q**"));
+  assertEquals(parts["text/plain"], "Thanks,\r\n\r\nAlan Tanaman\r\nExample Co\r\n\r\nkeep ** this\r\n> q");
+  assert(parts["text/html"].includes("<strong>Alan Tanaman</strong><br>Example Co"));
+  assert(parts["text/html"].includes("keep ** this"));
+  assert(parts["text/html"].includes("<strong>q</strong>"));
+  assert(!parts["text/html"].includes("**Alan"));
 });
 
 Deno.test("draft: each build uses a fresh boundary", () => {
