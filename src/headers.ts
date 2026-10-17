@@ -23,6 +23,8 @@ export interface ParsedHeaders {
   messageId: string | null;
   from: Address | null;
   replyTo: Address[];
+  /** Lower-cased To and Cc addresses (bounded); empty unless those fields were fetched. */
+  recipients: string[];
   subject: string;
   date: string | null;
   /** Every valid Message-ID in In-Reply-To (the field may legally list several). */
@@ -62,18 +64,49 @@ export function messageIds(field: string | undefined | null): string[] {
   return (field ?? "").match(/<[^<>\s]{1,200}>/g)?.filter(validMessageId).slice(0, 50) ?? [];
 }
 
+const MAX_RECIPIENTS = 100;
+
+type RawAddress = { name?: string; address?: string; group?: RawAddress[] };
+
+/** Lower-cased addresses from several address lists, sharing one overall cap. */
+function flatAddresses(...lists: Array<RawAddress[] | undefined>): string[] {
+  const out: string[] = [];
+  const walk = (items: RawAddress[]) => {
+    for (const a of items) {
+      if (out.length >= MAX_RECIPIENTS) return;
+      if (a.group) walk(a.group);
+      else {
+        const v = addr(a);
+        if (v) out.push(v.address.toLowerCase());
+      }
+    }
+  };
+  for (const list of lists) walk(list ?? []);
+  return out;
+}
+
 export async function parseHeaders(r: FetchResult): Promise<ParsedHeaders> {
-  const email = await PostalMime.parse(r.header ?? new Uint8Array());
+  // postal-mime throws on degenerate blocks (e.g. one cut to nothing by the partial fetch, or empty).
+  // Fail closed: treat it as an unreadable, truncated header block rather than crashing.
+  type Email = Awaited<ReturnType<typeof PostalMime.parse>>;
+  let email: Partial<Email> = {};
+  let unreadable = false;
+  try {
+    email = await PostalMime.parse(r.header ?? new Uint8Array());
+  } catch {
+    unreadable = true;
+  }
   const mid = email.messageId?.trim();
   return {
     uid: r.uid,
     messageId: validMessageId(mid) ? mid : null,
     from: addr(email.from),
     replyTo: (email.replyTo ?? []).map(addr).filter((a): a is Address => a !== null),
+    recipients: flatAddresses(email.to, email.cc),
     subject: clean(email.subject),
     date: email.date ? clean(email.date, 60) : null,
     inReplyTo: messageIds(email.inReplyTo),
     references: messageIds(email.references),
-    truncated: r.headerTruncated === true,
+    truncated: r.headerTruncated === true || unreadable,
   };
 }

@@ -21,7 +21,7 @@ stderr.
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `slipmail list-new --after-uid N`                                | Headers (`uid`, `messageId`, `from`, `subject`, `date`) of Inbox messages with UID > N, ascending, plus the Inbox `uidValidity`. Capped at 200 per call. When `truncated` is true, call again with `--after-uid` set to the returned `nextAfterUid` (it always moves forward, even across large gaps in UID numbering).                                                                       |
 | `slipmail fetch UID`                                             | Plain-text body (HTML is stripped only if there is no plain part) and allow-listed attachments saved under the scratch directory. Output carries `"untrusted": true`.                                                                                                                                                                                                                         |
-| `slipmail handled-check UID [--message-id ID] [--uidvalidity N]` | Is the message answered (`\Answered`), does Sent contain a message whose `In-Reply-To` or `References` matches, or has it left the Inbox? Once a UID has left the Inbox, pass the Message-ID you recorded from `list-new` so Sent and Archive can still be searched.                                                                                                                          |
+| `slipmail handled-check UID [--message-id ID] [--uidvalidity N]` | Is the message answered (`\Answered`), does Sent contain a reply (matched by `In-Reply-To`/`References`, else by subject, recipient and date; see `sentReplyBasis`), or has it left the Inbox? Once a UID has left the Inbox, pass the Message-ID you recorded from `list-new` so Sent and Archive can still be searched.                                                                     |
 | `slipmail save-draft --reply-to UID`                             | Reads the reply body from stdin (UTF-8, max 256 KiB). The recipient is computed from the original's `Reply-To`, else `From`; it can never be supplied by the caller. Sets `In-Reply-To` / `References` (refusing, with `headers_too_large`, if the original's headers are too large to read completely, rather than risk a wrong recipient), then `APPEND`s to Drafts with the `\Draft` flag. |
 
 Folders are found through IMAP SPECIAL-USE attributes (`\Sent`, `\Drafts`, `\Archive`, `\All`), then common
@@ -29,6 +29,17 @@ names (`Sent`, `Sent Items`, `Drafts`, `Archive`, `All Mail`, ...), then optiona
 (`FOLDER_SENT`, `FOLDER_DRAFTS`, `FOLDER_ARCHIVE`, which take precedence). Missing Sent or Drafts is a hard
 error. A message is "archived" when it is no longer in the Inbox, which covers Gmail-style label removal as
 well as moves.
+
+`handled-check` reports how it found a Sent reply in `sentReplyBasis`: `threading-headers` (an exact
+`In-Reply-To`/`References` match on the original's Message-ID) or `subject-and-recipient`. The second is a
+fallback for webmail that stores the Sent copy of a reply without any threading headers. It requires, all at
+once: a `Re:` subject whose base subject equals the original's, the original's `Reply-To` (else `From`)
+address among the Sent message's `To`/`Cc` (exact address comparison), and a Sent `INTERNALDATE` no earlier
+than the original's own `INTERNALDATE` (the server's receipt time, not the sender-controlled `Date` header).
+It looks only at Sent messages since the day before the original arrived, newest 500 at most, stopping at the
+first one older than the original. It is thread-level in effect: a later reply to the same sender and subject
+also marks an earlier unanswered message from that sender as handled. It only runs while the UID is still in
+the Inbox, because it needs the original's headers.
 
 Note: IMAP `N:*` always returns the highest message even when its UID is below `N`, so `list-new` filters by
 UID itself.
