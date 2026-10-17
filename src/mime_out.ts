@@ -81,5 +81,5 @@ export function buildDraft(p: DraftParts): Uint8Array {
     "Content-Type: text/plain; charset=utf-8",
     "Content-Transfer-Encoding: base64",
   ];
-  return new TextEncoder().encode(headers.join("\r\n") + "\r\n\r\n" + encoded.replace(/\r\n$/, ""));
+  return new TextEncoder().encode(headers.join("\r\n") + "\r\n\r\n" + encoded.replace(/\r\n$/, "") + "\r\n");
 }

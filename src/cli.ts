@@ -108,7 +108,9 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
       case "save-draft": {
         const p = parseArgs(rest, ["--reply-to"]);
         if (p.pos.length) throw new OpError("usage", "save-draft takes only --reply-to UID");
-        const uid = parseUid(p.flags.get("--reply-to"));
+        const replyTo = p.flags.get("--reply-to");
+        if (replyTo === undefined) throw new OpError("usage", "save-draft requires --reply-to UID");
+        const uid = parseUid(replyTo);
         const bytes = await deps.readStdin(config.limits.maxDraftBytes);
         let body: string;
         try {

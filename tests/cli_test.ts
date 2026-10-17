@@ -180,6 +180,7 @@ Deno.test("cli: unknown, missing and malformed invocations are usage errors with
       ["list-new", "--after-uid", "1", "--after-uid", "2"],
       ["list-new", "--after-uid"],
       ["list-new"],
+      ["save-draft"],
       ["list-new", "--after-uid", "-5"],
     ];
     for (const argv of cases) {

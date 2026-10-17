@@ -189,8 +189,21 @@ Deno.test("uidFetch: merges interleaved fragments by UID and returns only reques
 Deno.test("htmlToText: non-ASCII characters whose lowercase changes length do not shift offsets", () => {
   assertEquals(
     htmlToText("İ<script>hidden()</script><p>Visible</p>").trim(),
-    "İ  Visible".replace("  ", " "),
+    "İ\nVisible",
   );
   assertEquals(htmlToText("İİİ<SCRIPT>x</SCRIPT>after").includes("x"), false);
   assertEquals(htmlToText("İ<b>bold</b>"), "İbold");
+});
+
+Deno.test("htmlToText: an omitted </head> does not discard the body", () => {
+  const out = htmlToText(
+    '<html><head><meta charset="utf-8"><title>t</title><body><p>Hello</p><p>World</p></body></html>',
+  );
+  assertEquals(out.includes("Hello"), true);
+  assertEquals(out.includes("World"), true);
+  assertEquals(out.includes("<meta"), false);
+});
+
+Deno.test("htmlToText: unclosed <li>/<p> elements stay on separate lines", () => {
+  assertEquals(htmlToText("<ul><li>Item 1<li>Item 2</ul>"), "Item 1\nItem 2");
 });

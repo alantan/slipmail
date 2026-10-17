@@ -77,7 +77,13 @@ export function htmlToText(html: string): string {
       while (close >= 0 && /[a-z0-9_:-]/.test(lower[close + name.length + 2] ?? "")) {
         close = lower.indexOf(`</${name}`, close + 1);
       }
-      if (close < 0) break; // unterminated: drop the rest
+      if (close < 0) {
+        // HTML5 lets </head> be omitted: drop only up to <body. Unterminated script/style drop the rest.
+        const body = name === "head" ? lower.indexOf("<body", lt + 1) : -1;
+        if (body < 0) break;
+        i = body;
+        continue;
+      }
       const end = html.indexOf(">", close);
       if (end < 0) break;
       out += " ";
@@ -86,7 +92,7 @@ export function htmlToText(html: string): string {
     }
     const end = tagEnd(html, lt + 1);
     if (end < 0) break;
-    if (BREAK_TAGS.has(name) && (name === "br" || closing)) out += "\n";
+    if (BREAK_TAGS.has(name)) out += "\n";
     i = end + 1;
   }
   return out
@@ -96,6 +102,7 @@ export function htmlToText(html: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&amp;/g, "&")
     .replace(/[ \t]+/g, " ")
+    .replace(/ ?\n ?/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

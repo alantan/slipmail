@@ -133,3 +133,9 @@ Deno.test("copilot fake_imap: AUTHENTICATE accepts non-ASCII credentials and sti
     await Deno.remove(dir, { recursive: true }).catch(() => {});
   }
 });
+
+Deno.test("buildDraft: the message ends with CRLF", () => {
+  const raw = dec.decode(draftWithReferences(["<a@example.test>"]));
+  assertEquals(raw.endsWith("\r\n"), true);
+  assertEquals(raw.endsWith("\r\n\r\n"), false);
+});
