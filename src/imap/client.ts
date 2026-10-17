@@ -81,6 +81,7 @@ export type SearchCriterion =
   | { kind: "header"; name: string; value: string }
   | { kind: "uid"; set: string }
   | { kind: "or"; a: SearchCriterion; b: SearchCriterion }
+  | { kind: "last" } // the message with the highest sequence number (and so the highest UID)
   | { kind: "all" };
 
 const UID_SET = /^\d+(:(\d+|\*))?(,\d+(:(\d+|\*))?)*$/;
@@ -100,6 +101,8 @@ export const HEADER_PARTIAL_BYTES = 64 * 1024;
 
 export class ImapClient {
   capabilities = new Set<string>();
+  /** True after a PREAUTH greeting or a successful login: the session is in the authenticated state. */
+  authenticated = false;
   private tag = 0;
   private broken = false;
   private reader: WireReader;
@@ -121,6 +124,7 @@ export class ImapClient {
       const greeting = await client.reader.readLine();
       if (!/^\* (OK|PREAUTH)\b/i.test(greeting)) throw new ProtocolError("unexpected server greeting");
       client.noteCapabilityCode(greeting);
+      client.authenticated = /^\* PREAUTH\b/i.test(greeting);
       if (client.capabilities.size === 0) await client.refreshCapabilities();
     } catch (e) {
       conn.close();
@@ -144,6 +148,7 @@ export class ImapClient {
   }
 
   async login(user: string, password: string): Promise<void> {
+    if (this.authenticated) return; // PREAUTH: re-authenticating would be a protocol error
     if (this.capabilities.has("AUTH=PLAIN")) {
       const blob = btoa(String.fromCharCode(...new TextEncoder().encode(`\u0000${user}\u0000${password}`)));
       await this.run("AUTHENTICATE", "PLAIN", { continuation: () => blob + "\r\n" });
@@ -159,6 +164,7 @@ export class ImapClient {
       }
       await this.run("LOGIN", `${quoteString(user)} ${quoteString(password)}`);
     }
+    this.authenticated = true;
     await this.refreshCapabilities();
   }
 
@@ -212,7 +218,8 @@ export class ImapClient {
     }
     const byUid = new Map<number, FetchResult>();
     await this.run("UID FETCH", `${set} (${items.join(" ")})`, {
-      maxLiteral: what.source ? undefined : HEADER_PARTIAL_BYTES + 4096,
+      // Only ever tighten the connection-wide cap, never loosen it.
+      maxLiteral: what.source ? undefined : Math.min(this.maxLiteral, HEADER_PARTIAL_BYTES + 4096),
       onUntagged: async (kind, n, p) => {
         if (kind !== "FETCH" || n === undefined) return await drain(p);
         const list = nodeList(await p.value());
@@ -381,6 +388,8 @@ function renderCriterion(c: SearchCriterion): string {
   switch (c.kind) {
     case "all":
       return "ALL";
+    case "last":
+      return "*";
     case "uid":
       if (!UID_SET.test(c.set)) throw new ProtocolError("invalid UID set");
       return `UID ${c.set}`;

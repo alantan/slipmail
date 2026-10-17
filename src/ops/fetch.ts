@@ -13,6 +13,28 @@ export interface AttachmentInfo {
   skippedReason?: string;
 }
 
+/**
+ * Index of the ">" that ends a tag starting at `from`, or -1. A quote opens an attribute value only
+ * right after "=", and then runs to its matching quote, so `<div title="1 > 0">` ends at the last ">".
+ * One forward pass; an unterminated quoted value means the rest of the input is inside the tag.
+ */
+function tagEnd(html: string, from: number): number {
+  let prev = "";
+  for (let i = from; i < html.length; i++) {
+    const ch = html[i];
+    if (ch === ">") return i;
+    if ((ch === '"' || ch === "'") && prev === "=") {
+      const close = html.indexOf(ch, i + 1);
+      if (close < 0) return -1;
+      i = close;
+      prev = ch;
+      continue;
+    }
+    if (ch !== " " && ch !== "\t" && ch !== "\n" && ch !== "\r") prev = ch;
+  }
+  return -1;
+}
+
 const DROP_BLOCKS = new Set(["script", "style", "head"]);
 const BREAK_TAGS = new Set(["br", "p", "div", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6"]);
 
@@ -62,7 +84,7 @@ export function htmlToText(html: string): string {
       i = end + 1;
       continue;
     }
-    const end = html.indexOf(">", lt + 1);
+    const end = tagEnd(html, lt + 1);
     if (end < 0) break;
     if (BREAK_TAGS.has(name) && (name === "br" || closing)) out += "\n";
     i = end + 1;

@@ -27,6 +27,8 @@ export interface FakeServerOptions {
   /** How EXAMINE/SELECT reports UIDVALIDITY/UIDNEXT. Default "untagged". */
   /** Emit unsolicited FETCH updates and split each response into fragments. */
   interleaveFetch?: boolean;
+  /** Greet with PREAUTH (already authenticated) and reject any LOGIN/AUTHENTICATE. */
+  preauth?: boolean;
   examineStyle?: "untagged" | "tagged-only" | "no-uidnext";
 }
 
@@ -152,7 +154,10 @@ export class FakeImapServer {
 
     let authed = false;
     let selected: FakeFolder | null = null;
-    await send(`* OK [CAPABILITY ${caps.join(" ")}] fake ready\r\n`);
+    if (this.opts.preauth) {
+      authed = true;
+      await send(`* PREAUTH [CAPABILITY ${caps.join(" ")}] fake ready\r\n`);
+    } else await send(`* OK [CAPABILITY ${caps.join(" ")}] fake ready\r\n`);
 
     for (;;) {
       // Assemble a full command line, resolving synchronising literals.
@@ -202,6 +207,10 @@ export class FakeImapServer {
           conn.close();
           return;
         case "LOGIN": {
+          if (authed) {
+            await bad("already authenticated");
+            break;
+          }
           if (args[0] === this.opts.user && args[1] === this.opts.password) {
             authed = true;
             await ok("LOGIN completed");
@@ -209,6 +218,10 @@ export class FakeImapServer {
           break;
         }
         case "AUTHENTICATE": {
+          if (authed) {
+            await bad("already authenticated");
+            break;
+          }
           let ir = args[1] as string | undefined;
           if (!ir) {
             await send("+ \r\n");

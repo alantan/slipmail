@@ -136,20 +136,29 @@ kind of password it requires):
 
 ## Install
 
-Build, then install the binary where your own user cannot modify it:
+Build, then install the binary somewhere your own user cannot modify. A root-owned file is **not** enough on
+its own: anyone who can write to a parent directory can unlink the file and put another one in its place. So
+install under a root-owned directory tree and check every ancestor:
 
 ```sh
-sudo install -o root -g wheel -m 0755 dist/slipmail /usr/local/libexec/slipmail
-ls -l /usr/local/libexec/slipmail      # root:wheel, -rwxr-xr-x
+dest=/usr/local/libexec/slipmail
+sudo install -d -o root -g wheel -m 0755 "$(dirname "$dest")"
+sudo install -o root -g wheel -m 0755 dist/slipmail "$dest"
+
+# Every component from the file up to / must be owned by root and not group- or world-writable.
+p=$dest; while :; do stat -f '%Su %Sp %N' "$p"; [ "$p" = / ] && break; p=$(dirname "$p"); done
 ```
 
+Each line must start with `root` and show no `w` in the group or other positions (for example
+`root -rwxr-xr-x ...` or `root drwxr-xr-x ...`). If `/usr/local` or any other ancestor fails the check (some
+Homebrew setups make `/usr/local` user-owned), choose a location whose ancestors all pass instead of relaxing
+the check.
+
 Keychain access list: the program reads the item by running `/usr/bin/security`, so macOS sees `security` (not
-slipmail) as the requesting application. An item you create with `security
-add-generic-password` already
+slipmail) as the requesting application. An item you create with `security add-generic-password` already
 trusts `security`, and the access list cannot tell _which program asked `security`_. Be clear about what that
 means: the root-owned binary protects against **tampering with slipmail**, but any process running as your
-user can run `/usr/bin/security find-generic-password -s
-slipmail -a ADDRESS -w` itself and may be allowed to
+user can run `/usr/bin/security find-generic-password -s slipmail -a ADDRESS -w` itself and may be allowed to
 read the item. If you need the agent to be unable to read the password, run the broker under a separate OS
 account (or add a store that does not go through a user-invocable tool); this repository does not claim to
 provide that boundary today.

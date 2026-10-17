@@ -18,7 +18,13 @@ export async function listNew(s: Session, afterUid: number) {
 
   // Walk ascending UID windows. A window that finds nothing doubles the next one (sparse UIDs);
   // we stop once we hold more than `limit` UIDs (enough to know the list is truncated).
-  const top = info.uidNext ? info.uidNext - 1 : MAX_UID;
+  // Never scan past the highest UID that exists: without UIDNEXT, ask for the last message's UID
+  // (and handle an empty Inbox), so a cursor can never leap over mail that arrives later.
+  const top = info.uidNext
+    ? info.uidNext - 1
+    : info.exists === 0
+    ? 0
+    : Math.max(0, ...await s.client.uidSearch({ kind: "last" }));
   const uids: number[] = [];
   let from = afterUid + 1;
   let width = START_WINDOW;
