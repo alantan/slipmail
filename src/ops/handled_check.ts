@@ -63,9 +63,11 @@ export async function handledCheck(s: Session, uid: number, opts: HandledOptions
   const messageId = original?.messageId ?? opts.messageId ?? null;
 
   let sentReply = false;
+  let sentExamined = false;
   let sentReplyBasis: "threading-headers" | "subject-and-recipient" | null = null;
   if (messageId) {
     await s.client.examine(s.folders.sent);
+    sentExamined = true;
     const hits = await s.client.uidSearch(
       {
         kind: "or",
@@ -87,7 +89,7 @@ export async function handledCheck(s: Session, uid: number, opts: HandledOptions
   // match above cannot see it. Fall back to a bounded, exact comparison: a "Re:" message in Sent with
   // the same base subject, addressed to the original's sender, received after the original arrived.
   if (!sentReply && original && !original.truncated) {
-    sentReply = await sentReplyByContent(s, original, parseInternalDate(row?.internalDate));
+    sentReply = await sentReplyByContent(s, original, parseInternalDate(row?.internalDate), sentExamined);
     if (sentReply) sentReplyBasis = "subject-and-recipient";
   }
 
@@ -116,6 +118,7 @@ async function sentReplyByContent(
   s: Session,
   original: ParsedHeaders,
   receivedAt: number | null,
+  sentExamined: boolean,
 ): Promise<boolean> {
   const subject = baseSubject(original.subject);
   // The original's own INTERNALDATE (server receipt time) is the floor: its Date header is sender-controlled.
@@ -126,7 +129,7 @@ async function sentReplyByContent(
   );
   if (!senders.size) return false;
 
-  await s.client.examine(s.folders.sent);
+  if (!sentExamined) await s.client.examine(s.folders.sent);
   // SINCE ignores the time of day and timezone, so start a day early and compare exactly afterwards.
   const hits = await s.client.uidSearch({ kind: "since", day: new Date(receivedAt - DAY_MS) });
   return await anyExact(

@@ -1,8 +1,9 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { baseSubject, handledCheck } from "../src/ops/handled_check.ts";
 import { parseInternalDate } from "../src/imap/client.ts";
+import { ProtocolError } from "../src/imap/protocol.ts";
 import { type FakeFolder, makeFolder } from "./support/fake_imap.ts";
-import { type Harness, rfc822, startHarness } from "./support/harness.ts";
+import { type Harness, PASSWORD, rfc822, startHarness, USER } from "./support/harness.ts";
 import { makeCtx } from "./support/ctx.ts";
 import type { Session } from "../src/session.ts";
 
@@ -126,7 +127,7 @@ Deno.test("sent fallback: Reply-To, not From, is the sender to look for", async 
 Deno.test("sent fallback: a forged old Date header cannot make an old reply count", async () => {
   const forged = original({ Date: "Mon, 01 Jan 2024 00:00:00 +0000" });
   const { r } = await check([forged], [
-    sentCopy({}, "02 Jan 2025".length ? "01-Mar-2025 10:00:00 +0000" : ""),
+    sentCopy({}, "01-Mar-2025 10:00:00 +0000"),
   ]);
   assertEquals(r.sentReply, false);
 });
@@ -154,4 +155,54 @@ Deno.test("parseInternalDate and baseSubject", () => {
   assertEquals(parseInternalDate(undefined), null);
   assertEquals(baseSubject("Re: RE:  Fwd: Hello   World "), "hello world");
   assertEquals(baseSubject("Re:"), "");
+});
+
+const PAD = "x".repeat(70_000); // more than the 64 KiB partial header fetch
+
+Deno.test("sent fallback: truncated headers on the original skip the fallback", async () => {
+  // From/Subject/Message-ID come before the cut, so without the guard this would match the default Sent copy.
+  const { r } = await check([original({ "Reply-To": `${PAD}@example.com` })], [sentCopy()]);
+  assertEquals(r.sentReply, false);
+});
+
+Deno.test("sent fallback: a Sent message with truncated headers is not trusted", async () => {
+  // Subject and To come before the cut, so without the guard this would match.
+  const { r } = await check([original()], [sentCopy({ Cc: `${PAD}@example.com` })]);
+  assertEquals(r.sentReply, false);
+});
+
+Deno.test("sent fallback: empty subject, or an unparseable INTERNALDATE, never matches", async () => {
+  const noSubject = await check([original({ Subject: "Re:" })], [sentCopy({ Subject: "Re:" })]);
+  assertEquals(noSubject.r.sentReply, false);
+  const badDate = await check([{ ...original(), internalDate: "not a date" }], [sentCopy()]);
+  assertEquals(badDate.r.sentReply, false);
+});
+
+Deno.test("search: an invalid SINCE date is refused before anything is sent", async () => {
+  const h = await startHarness(folders([original()], []));
+  try {
+    const c = await h.connect();
+    try {
+      await c.login(USER, PASSWORD);
+      await c.examine("INBOX");
+      await assertRejects(() => c.uidSearch({ kind: "since", day: new Date(NaN) }), ProtocolError, "SINCE");
+    } finally {
+      await c.logout();
+    }
+  } finally {
+    await h.close();
+  }
+});
+
+Deno.test("parseHeaders: an unparseable header block fails closed as truncated instead of throwing", async () => {
+  const { parseHeaders } = await import("../src/headers.ts");
+  const h = await parseHeaders({
+    seq: 1,
+    uid: 1,
+    flags: [],
+    header: new TextEncoder().encode(`To: ${"x".repeat(70_000)}`),
+    headerTruncated: true,
+  });
+  assertEquals(h.truncated, true);
+  assertEquals(h.messageId, null);
 });

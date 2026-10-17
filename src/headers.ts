@@ -68,7 +68,8 @@ const MAX_RECIPIENTS = 100;
 
 type RawAddress = { name?: string; address?: string; group?: RawAddress[] };
 
-function flatAddresses(list: RawAddress[] | undefined): string[] {
+/** Lower-cased addresses from several address lists, sharing one overall cap. */
+function flatAddresses(...lists: Array<RawAddress[] | undefined>): string[] {
   const out: string[] = [];
   const walk = (items: RawAddress[]) => {
     for (const a of items) {
@@ -80,23 +81,32 @@ function flatAddresses(list: RawAddress[] | undefined): string[] {
       }
     }
   };
-  walk(list ?? []);
+  for (const list of lists) walk(list ?? []);
   return out;
 }
 
 export async function parseHeaders(r: FetchResult): Promise<ParsedHeaders> {
-  const email = await PostalMime.parse(r.header ?? new Uint8Array());
+  // postal-mime throws on degenerate blocks (e.g. one cut to nothing by the partial fetch, or empty).
+  // Fail closed: treat it as an unreadable, truncated header block rather than crashing.
+  type Email = Awaited<ReturnType<typeof PostalMime.parse>>;
+  let email: Partial<Email> = {};
+  let unreadable = false;
+  try {
+    email = await PostalMime.parse(r.header ?? new Uint8Array());
+  } catch {
+    unreadable = true;
+  }
   const mid = email.messageId?.trim();
   return {
     uid: r.uid,
     messageId: validMessageId(mid) ? mid : null,
     from: addr(email.from),
     replyTo: (email.replyTo ?? []).map(addr).filter((a): a is Address => a !== null),
-    recipients: [...flatAddresses(email.to), ...flatAddresses(email.cc)].slice(0, MAX_RECIPIENTS),
+    recipients: flatAddresses(email.to, email.cc),
     subject: clean(email.subject),
     date: email.date ? clean(email.date, 60) : null,
     inReplyTo: messageIds(email.inReplyTo),
     references: messageIds(email.references),
-    truncated: r.headerTruncated === true,
+    truncated: r.headerTruncated === true || unreadable,
   };
 }
