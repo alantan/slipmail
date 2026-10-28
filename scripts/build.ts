@@ -63,6 +63,7 @@ const config: BrokerConfig = {
 const code = await run(Deno.args, config, {
   secrets: new KeychainStore("slipmail"),
   readStdin: (max) => readCapped(Deno.stdin.readable, max),
+  readFile: async (path, max) => readCapped((await Deno.open(path)).readable, max),
   write: (json) => console.log(json),
 });
 Deno.exit(code);

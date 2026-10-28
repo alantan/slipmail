@@ -6,7 +6,14 @@ import { ImapCommandError, ProtocolError } from "./imap/client.ts";
 import { fetchMessage } from "./ops/fetch.ts";
 import { handledCheck } from "./ops/handled_check.ts";
 import { listNew } from "./ops/list_new.ts";
-import { saveDraft, validateDraftBody } from "./ops/save_draft.ts";
+import {
+  parseBatch,
+  saveDraft,
+  saveNewDraft,
+  saveNewDrafts,
+  validateDraftBody,
+  validateNewDraft,
+} from "./ops/save_draft.ts";
 import { FolderError } from "./folders.ts";
 import { validMessageId } from "./headers.ts";
 import { SecretError, type SecretStore } from "./secrets.ts";
@@ -15,11 +22,32 @@ import { openSession, OpError, parseUid } from "./session.ts";
 export interface CliDeps {
   secrets: SecretStore;
   readStdin: (maxBytes: number) => Promise<Uint8Array>;
+  /** Reads a --batch file; the binary can only read under its scratch directory. */
+  readFile: (path: string, maxBytes: number) => Promise<Uint8Array>;
   write: (json: string) => void;
 }
 
 const USAGE = "usage: slipmail list-new --after-uid N | fetch UID | " +
-  "handled-check UID [--message-id ID] [--uidvalidity N] | save-draft --reply-to UID (body on stdin)";
+  "handled-check UID [--message-id ID] [--uidvalidity N] | save-draft --reply-to UID (body on stdin) | " +
+  "save-draft --to ADDRESS --subject TEXT (body on stdin) | save-draft --batch FILE";
+
+const MAX_BATCH_FILE_BYTES = 4 * 1024 * 1024;
+
+function decodeUtf8(bytes: Uint8Array, what: string): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new OpError("usage", `${what} must be valid UTF-8`);
+  }
+}
+
+/** Batch files must sit directly under the scratch directory, the only place the binary may read. */
+function checkBatchPath(path: string, scratchDir: string): void {
+  const rel = path.startsWith(scratchDir + "/") ? path.slice(scratchDir.length + 1) : null;
+  if (rel === null || rel.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
+    throw new OpError("usage", `--batch FILE must be an absolute path inside ${scratchDir}`);
+  }
+}
 
 /** Strict flag parser: only the named flags, each taking exactly one value. */
 function parseArgs(args: string[], flags: string[]): { pos: string[]; flags: Map<string, string> } {
@@ -109,24 +137,51 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
         break;
       }
       case "save-draft": {
-        const p = parseArgs(rest, ["--reply-to"]);
-        if (p.pos.length) throw new OpError("usage", "save-draft takes only --reply-to UID");
-        const replyTo = p.flags.get("--reply-to");
-        if (replyTo === undefined) throw new OpError("usage", "save-draft requires --reply-to UID");
-        const uid = parseUid(replyTo);
-        const bytes = await deps.readStdin(config.limits.maxDraftBytes);
-        let body: string;
-        try {
-          body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-        } catch {
-          throw new OpError("usage", "draft body must be valid UTF-8");
-        }
-        validateDraftBody(body);
-        const s = await openSession(config, deps.secrets);
-        try {
-          result = await saveDraft(s, uid, body);
-        } finally {
-          await s.client.logout();
+        const p = parseArgs(rest, ["--reply-to", "--to", "--subject", "--batch"]);
+        const f = p.flags;
+        if (p.pos.length) throw new OpError("usage", "save-draft takes no positional arguments");
+        const replyTo = f.get("--reply-to");
+        const batch = f.get("--batch");
+        if (batch !== undefined) {
+          if (f.size !== 1) throw new OpError("usage", "--batch cannot be combined with other flags");
+          checkBatchPath(batch, config.scratchDir);
+          const specs = parseBatch(
+            decodeUtf8(await deps.readFile(batch, MAX_BATCH_FILE_BYTES), "batch file"),
+          );
+          const s = await openSession(config, deps.secrets);
+          try {
+            result = await saveNewDrafts(s, specs);
+          } finally {
+            await s.client.logout();
+          }
+        } else if (replyTo !== undefined) {
+          if (f.size !== 1) throw new OpError("usage", "--reply-to cannot be combined with other flags");
+          const uid = parseUid(replyTo);
+          const body = decodeUtf8(await deps.readStdin(config.limits.maxDraftBytes), "draft body");
+          validateDraftBody(body);
+          const s = await openSession(config, deps.secrets);
+          try {
+            result = await saveDraft(s, uid, body);
+          } finally {
+            await s.client.logout();
+          }
+        } else {
+          const to = f.get("--to");
+          const subject = f.get("--subject");
+          if (to === undefined || subject === undefined || f.size !== 2) {
+            throw new OpError(
+              "usage",
+              "save-draft requires --reply-to UID, --to ADDRESS --subject TEXT, or --batch FILE",
+            );
+          }
+          const body = decodeUtf8(await deps.readStdin(config.limits.maxDraftBytes), "draft body");
+          validateNewDraft(to, subject, body);
+          const s = await openSession(config, deps.secrets);
+          try {
+            result = { saved: true, folder: "drafts", ...await saveNewDraft(s, to, subject, body) };
+          } finally {
+            await s.client.logout();
+          }
         }
         break;
       }

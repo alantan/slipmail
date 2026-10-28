@@ -188,6 +188,7 @@ Deno.test("round2 CLI list-new: --after-uid 4294967296 is a usage error (exit 2)
       const code = await run(["list-new", "--after-uid", "4294967296"], ctx.config, {
         secrets: ctx.secrets,
         readStdin: () => Promise.resolve(new Uint8Array(0)),
+        readFile: () => Promise.reject(new Error("no files")),
         write: (j) => writes.push(j),
       });
       assertEquals(code, 2);
@@ -212,6 +213,7 @@ Deno.test("round2 CLI list-new: --after-uid 4294967295 succeeds with an empty li
       const code = await run(["list-new", "--after-uid", "4294967295"], ctx.config, {
         secrets: ctx.secrets,
         readStdin: () => Promise.resolve(new Uint8Array(0)),
+        readFile: () => Promise.reject(new Error("no files")),
         write: (j) => writes.push(j),
       });
       assertEquals(code, 0);

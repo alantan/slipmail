@@ -34,6 +34,8 @@ interface Outcome {
 interface Invoke {
   argv: string[];
   stdin?: Uint8Array;
+  /** Contents served by readFile, keyed by path. */
+  files?: Record<string, string>;
   readStdin?: (maxBytes: number) => Promise<Uint8Array>;
   secrets?: { getPassword(account: string): Promise<string> };
 }
@@ -44,6 +46,10 @@ async function invoke(ctx: TestCtx, inv: Invoke): Promise<Outcome> {
   const code = await run(inv.argv, ctx.config, {
     secrets: inv.secrets ?? ctx.secrets,
     readStdin: inv.readStdin ?? (() => Promise.resolve(inv.stdin ?? new Uint8Array(0))),
+    readFile: (path) => {
+      const f = inv.files?.[path];
+      return f === undefined ? Promise.reject(new Deno.errors.NotFound()) : Promise.resolve(enc.encode(f));
+    },
     write: (json) => writes.push(json),
   });
   assertEquals(writes.length, 1, `expected exactly one JSON document, got ${writes.length}`);
@@ -212,12 +218,16 @@ Deno.test("cli: unknown, missing and malformed invocations are usage errors with
   }
 });
 
-Deno.test("cli: save-draft refuses caller-supplied recipients and extra positionals", async () => {
+Deno.test("cli: save-draft refuses mixed forms and extra positionals", async () => {
   const s = await setup();
   try {
     const argvs: string[][] = [
       ["save-draft", "1", "--reply-to", "1"],
       ["save-draft", "--reply-to", "1", "--to", "someone@example.com"],
+      ["save-draft", "--reply-to", "1", "--subject", "x"],
+      ["save-draft", "--to", "someone@example.com"],
+      ["save-draft", "--subject", "x"],
+      ["save-draft", "--to", "someone@example.com", "--subject", "x", "--from-name-only"],
     ];
     for (const argv of argvs) {
       const out = await invoke(s.ctx, { argv, stdin: enc.encode("Thanks!") });
@@ -322,4 +332,145 @@ Deno.test("readCapped: rejects with too_large when the cap is exceeded", async (
     OpError,
   );
   assertEquals(err.code, "too_large");
+});
+
+// ---- New-message drafts (--to/--subject and --batch) --------------------------------------------
+
+Deno.test("cli: save-draft --to saves an unthreaded multipart draft and never sends", async () => {
+  const s = await setup();
+  try {
+    const out = await invoke(s.ctx, {
+      argv: ["save-draft", "--to", "carol@example.com", "--subject", "Intro \u00e9"],
+      stdin: enc.encode("Hello **Carol**\n\n> quoted"),
+    });
+    assertEquals(out.code, 0);
+    assertEquals(out.doc, {
+      ok: true,
+      saved: true,
+      folder: "drafts",
+      to: "carol@example.com",
+      subject: "Intro \u00e9",
+    });
+    const drafts = s.h.server.folder("Drafts").messages;
+    assertEquals(drafts.length, 1);
+    const raw = drafts[0].raw;
+    assert(raw.includes("To: carol@example.com\r\n"));
+    assertEquals(/^(In-Reply-To|References):/mi.test(raw), false);
+    const parts = draftParts(raw);
+    assertEquals(parts["text/plain"], "Hello Carol\r\n\r\n> quoted");
+    assert(parts["text/html"].includes("<strong>Carol</strong>"));
+    assertEquals(s.h.server.commandLog.some((c) => /SEND|SMTP|DATA|RCPT/i.test(c)), false);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --to validates address, subject and body before connecting", async () => {
+  const s = await setup();
+  try {
+    const bad: string[][] = [
+      ["not-an-address", "Hi"],
+      ["a@example.com, b@example.com", "Hi"],
+      ["Carol <carol@example.com>", "Hi"],
+      ["carol@example.com", ""],
+      ["carol@example.com", "Hi\r\nBcc: x@example.com"],
+      ["carol@example.com", "x".repeat(301)],
+    ];
+    for (const [to, subject] of bad) {
+      assertUsageFailure(
+        await invoke(s.ctx, {
+          argv: ["save-draft", "--to", to, "--subject", subject],
+          stdin: enc.encode("Body"),
+        }),
+      );
+    }
+    assertUsageFailure(
+      await invoke(s.ctx, {
+        argv: ["save-draft", "--to", "c@example.com", "--subject", "Hi"],
+        stdin: enc.encode(" "),
+      }),
+    );
+    assertEquals(s.h.server.commandLog, []);
+  } finally {
+    await s.done();
+  }
+});
+
+function batchLines(n: number): string {
+  return Array.from(
+    { length: n },
+    (_, i) =>
+      JSON.stringify({ to: `p${i}@example.com`, subject: `Subject ${i}`, body: `Body ${i} **bold**` }),
+  ).join("\n");
+}
+
+Deno.test("cli: save-draft --batch saves 40 drafts in one session and lists each", async () => {
+  const s = await setup();
+  try {
+    const file = `${s.ctx.config.scratchDir}/drafts.jsonl`;
+    const out = await invoke(s.ctx, {
+      argv: ["save-draft", "--batch", file],
+      files: { [file]: batchLines(40) + "\n" },
+    });
+    assertEquals(out.code, 0);
+    assertEquals(out.doc.count, 40);
+    const listed = out.doc.drafts as Array<{ to: string; subject: string }>;
+    assertEquals(listed[39], { to: "p39@example.com", subject: "Subject 39" });
+    assertEquals(s.h.server.folder("Drafts").messages.length, 40);
+    assertEquals(s.h.server.commandLog.filter((c) => c === "LIST").length, 1);
+    assertEquals(/^(In-Reply-To|References):/mi.test(s.h.server.folder("Drafts").messages[0].raw), false);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --batch validates every line before saving any", async () => {
+  const s = await setup();
+  try {
+    const file = `${s.ctx.config.scratchDir}/b.jsonl`;
+    const cases: string[] = [
+      batchLines(2) + "\nnot json",
+      batchLines(2) + '\n{"to":"x@example.com","subject":"s"}',
+      batchLines(2) + '\n{"to":"x@example.com","subject":"s","body":"b","cc":"y@example.com"}',
+      batchLines(2) + '\n{"to":"bad","subject":"s","body":"b"}',
+      "\n\n",
+      batchLines(101),
+    ];
+    for (const content of cases) {
+      assertUsageFailure(
+        await invoke(s.ctx, { argv: ["save-draft", "--batch", file], files: { [file]: content } }),
+      );
+    }
+    assertEquals(s.h.server.commandLog, []);
+    assertEquals(s.h.server.folder("Drafts").messages.length, 0);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --batch only accepts files inside the scratch directory", async () => {
+  const s = await setup();
+  try {
+    const dir = s.ctx.config.scratchDir;
+    for (
+      const path of [
+        "/etc/passwd",
+        "relative.jsonl",
+        `${dir}/../x.jsonl`,
+        `${dir}/a/../b.jsonl`,
+        dir,
+        `${dir}-other/x`,
+      ]
+    ) {
+      assertUsageFailure(
+        await invoke(s.ctx, { argv: ["save-draft", "--batch", path], files: { [path]: batchLines(1) } }),
+      );
+    }
+    assertUsageFailure(
+      await invoke(s.ctx, { argv: ["save-draft", "--batch", `${dir}/b.jsonl`, "--to", "a@example.com"] }),
+    );
+    assertEquals(s.h.server.commandLog, []);
+  } finally {
+    await s.done();
+  }
 });
