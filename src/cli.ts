@@ -43,7 +43,8 @@ function decodeUtf8(bytes: Uint8Array, what: string): string {
 
 /** Batch files must sit inside the scratch directory (nested subpaths are allowed), the only place the binary may read. */
 function checkBatchPath(path: string, scratchDir: string): void {
-  const rel = path.startsWith(scratchDir + "/") ? path.slice(scratchDir.length + 1) : null;
+  const base = scratchDir.replace(/\/+$/, "");
+  const rel = path.startsWith(base + "/") ? path.slice(base.length + 1) : null;
   if (rel === null || rel.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
     throw new OpError("usage", `--batch FILE must be an absolute path inside ${scratchDir}`);
   }

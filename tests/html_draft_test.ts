@@ -215,6 +215,25 @@ Deno.test("html: hostile text is only ever emitted as escaped text", () => {
 
 // ---------------------------------------------------------------- message structure
 
+Deno.test("draft: empty references array emits no References header; In-Reply-To stays independent", () => {
+  const base = {
+    from: "me@example.test",
+    to: "you@example.test",
+    subject: "Hi",
+    body: "x",
+    now: new Date("2026-01-02T03:04:05Z"),
+    idDomain: "example.test",
+  };
+  const bare = new TextDecoder().decode(buildDraft({ ...base, references: [] }));
+  assertEquals(/^References:/mi.test(bare), false);
+  assertEquals(/^In-Reply-To:/mi.test(bare), false);
+  const replyOnly = new TextDecoder().decode(
+    buildDraft({ ...base, inReplyTo: "<a@example.test>", references: [] }),
+  );
+  assert(replyOnly.includes("In-Reply-To: <a@example.test>\r\n"));
+  assertEquals(/^References:/mi.test(replyOnly), false);
+});
+
 function build(body: string, subject = "Re: x"): string {
   return new TextDecoder().decode(buildDraft({
     from: "me@example.test",

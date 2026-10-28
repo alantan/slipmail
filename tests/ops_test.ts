@@ -1,13 +1,14 @@
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import PostalMime from "postal-mime";
 import type { BrokerConfig } from "../src/config.ts";
 import { fetchMessage } from "../src/ops/fetch.ts";
 import { handledCheck } from "../src/ops/handled_check.ts";
 import { listNew } from "../src/ops/list_new.ts";
-import { saveDraft } from "../src/ops/save_draft.ts";
+import { parseBatch, saveDraft, saveNewDraft, saveNewDrafts } from "../src/ops/save_draft.ts";
+import { ImapCommandError, ProtocolError } from "../src/imap/client.ts";
 import { OpError, type Session } from "../src/session.ts";
 import { type FakeFolder, makeFolder } from "./support/fake_imap.ts";
-import { type Harness, rfc822, startHarness, USER } from "./support/harness.ts";
+import { draftParts, type Harness, rfc822, startHarness, USER } from "./support/harness.ts";
 import { makeCtx, type TestCtx } from "./support/ctx.ts";
 
 const enc = new TextEncoder();
@@ -546,4 +547,94 @@ Deno.test("save-draft: only allowed verbs reach the wire and Inbox is unchanged"
     assertEquals(h.server.folder("INBOX").messages.length, beforeCount);
     assertEquals(draftCount(h), 1);
   });
+});
+
+// ---------------------------------------------------------------- new-message drafts
+
+const LIMIT = 256 * 1024;
+
+Deno.test("parseBatch: valid JSON lines parse in order; blank lines are skipped", () => {
+  const specs = parseBatch(
+    '{"to":"a@example.com","subject":"A","body":"one"}\n\n   \r\n{"to":"b@example.com","subject":"B","body":"two"}\n',
+    LIMIT,
+  );
+  assertEquals(specs, [
+    { to: "a@example.com", subject: "A", body: "one" },
+    { to: "b@example.com", subject: "B", body: "two" },
+  ]);
+});
+
+Deno.test("parseBatch: an extra key is a usage error naming the line", () => {
+  const err = assertThrows(
+    () =>
+      parseBatch(
+        '{"to":"a@example.com","subject":"A","body":"x"}\n{"to":"a@example.com","subject":"A","body":"x","cc":"c@example.com"}',
+        LIMIT,
+      ),
+    OpError,
+  );
+  assertEquals(err.code, "usage");
+  assert(err.message.startsWith("batch line 2:"), err.message);
+});
+
+Deno.test("parseBatch: a body over the byte limit is a usage error naming the line", () => {
+  const big = "\u00e9".repeat(LIMIT / 2 + 1); // 2 bytes per character, over the limit in bytes
+  const line = JSON.stringify({ to: "a@example.com", subject: "A", body: big });
+  const err = assertThrows(
+    () => parseBatch(`{"to":"a@example.com","subject":"A","body":"ok"}\n${line}`, LIMIT),
+    OpError,
+  );
+  assertEquals(err.code, "usage");
+  assertEquals(err.message, `batch line 2: body exceeds ${LIMIT} bytes`);
+});
+
+Deno.test("saveNewDraft: appended draft has no threading headers and carries text and html parts", async () => {
+  await withSession(mailbox(), {}, async ({ s, h }) => {
+    const r = await saveNewDraft(s, "carol@example.com", "Intro", "Hello **Carol**\n\n> quoted");
+    assertEquals(r, { to: "carol@example.com", subject: "Intro" });
+    const d = await parseDraft(h);
+    assertEquals(d.parsed.inReplyTo, undefined);
+    assertEquals(d.parsed.references, undefined);
+    assert(d.flags.includes("\\Draft"), `flags: ${d.flags}`);
+    const parts = draftParts(d.raw);
+    assertEquals(parts["text/plain"], "Hello Carol\r\n\r\n> quoted");
+    assert(parts["text/html"].includes("<strong>Carol</strong>"));
+    assertSafeLog(h);
+  });
+});
+
+Deno.test("saveNewDrafts: reports count and each saved to/subject", async () => {
+  await withSession(mailbox(), {}, async ({ s, h }) => {
+    const out = await saveNewDrafts(s, [
+      { to: "a@example.com", subject: "A", body: "one" },
+      { to: "b@example.com", subject: "B", body: "two" },
+    ]);
+    assertEquals(out, {
+      saved: true,
+      folder: "drafts",
+      count: 2,
+      drafts: [{ to: "a@example.com", subject: "A" }, { to: "b@example.com", subject: "B" }],
+    });
+    assertEquals(draftCount(h), 2);
+    assertSafeLog(h);
+  });
+});
+
+Deno.test("saveNewDrafts: each client error class keeps its code and the progress prefix", async () => {
+  const spec = [{ to: "a@example.com", subject: "A", body: "one" }];
+  const cases: Array<[Error, string, string]> = [
+    [new ImapCommandError("NO", "[OVERQUOTA] full"), "imap", "[OVERQUOTA] full"],
+    [new ProtocolError("connection closed by server"), "protocol", "connection closed by server"],
+    [new Error("secret internals"), "internal", "append failed"],
+  ];
+  for (const [thrown, code, reason] of cases) {
+    const stub = {
+      client: { appendDraft: () => Promise.reject(thrown) },
+      folders: { drafts: "Drafts" },
+      config: { mailbox: USER },
+    } as unknown as Session;
+    const err = await assertRejects(() => saveNewDrafts(stub, spec), OpError);
+    assertEquals(err.code, code);
+    assertEquals(err.message, `saved 0 of 1 drafts; stopped at draft 1: ${reason}`);
+  }
 });

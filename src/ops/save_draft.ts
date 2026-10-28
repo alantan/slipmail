@@ -1,3 +1,4 @@
+import { ImapCommandError, ProtocolError } from "../imap/client.ts";
 import { HEADER_FIELDS, parseHeaders } from "../headers.ts";
 import { buildDraft, validAddress } from "../mime_out.ts";
 import { OpError, type Session } from "../session.ts";
@@ -130,12 +131,15 @@ export async function saveNewDrafts(s: Session, specs: NewDraftSpec[]) {
     try {
       drafts.push(await saveNewDraft(s, d.to, d.subject, d.body));
     } catch (e) {
-      const code = e instanceof OpError ? e.code : "imap";
+      // Same classes as cli.ts describe(); anything unrecognised is reported without its text.
+      let code = "internal";
+      let reason = "append failed";
+      if (e instanceof OpError) [code, reason] = [e.code, e.message];
+      else if (e instanceof ImapCommandError) [code, reason] = ["imap", e.message];
+      else if (e instanceof ProtocolError) [code, reason] = ["protocol", e.message];
       throw new OpError(
         code,
-        `saved ${drafts.length} of ${specs.length} drafts; stopped at draft ${i + 1}: ${
-          e instanceof OpError ? e.message : "append failed"
-        }`,
+        `saved ${drafts.length} of ${specs.length} drafts; stopped at draft ${i + 1}: ${reason}`,
       );
     }
   }

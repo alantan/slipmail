@@ -94,7 +94,8 @@ export function buildDraft(p: DraftParts): Uint8Array {
     `Subject: ${encodeHeaderValue(p.subject)}`,
     `Date: ${date}`,
     `Message-ID: ${messageId}`,
-    ...(p.inReplyTo ? [`In-Reply-To: ${p.inReplyTo}`, foldReferences(p.references ?? [])] : []),
+    ...(p.inReplyTo ? [`In-Reply-To: ${p.inReplyTo}`] : []),
+    ...(p.references?.length ? [foldReferences(p.references)] : []),
     "MIME-Version: 1.0",
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ];

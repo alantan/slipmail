@@ -47,10 +47,15 @@ async function invoke(ctx: TestCtx, inv: Invoke): Promise<Outcome> {
   const code = await run(inv.argv, ctx.config, {
     secrets: inv.secrets ?? ctx.secrets,
     readStdin: inv.readStdin ?? (() => Promise.resolve(inv.stdin ?? new Uint8Array(0))),
-    readFile: (path) => {
+    readFile: (path, maxBytes) => {
       const f = inv.files?.[path];
       if (f === undefined) return Promise.reject(new Deno.errors.NotFound());
-      return Promise.resolve(typeof f === "string" ? enc.encode(f) : f);
+      const bytes = typeof f === "string" ? enc.encode(f) : f;
+      // Mirrors readCapped: an over-cap file is refused with too_large, never returned.
+      if (bytes.length > maxBytes) {
+        return Promise.reject(new OpError("too_large", `batch file exceeds ${maxBytes} bytes`));
+      }
+      return Promise.resolve(bytes);
     },
     write: (json) => writes.push(json),
   });
@@ -492,7 +497,7 @@ Deno.test("cli: save-draft --batch reports partial progress when an APPEND fails
     assertEquals(out.doc.ok, false);
     assertEquals(out.doc.error, {
       code: "imap",
-      message: "saved 2 of 4 drafts; stopped at draft 3: append failed",
+      message: "saved 2 of 4 drafts; stopped at draft 3: APPEND failed: [OVERQUOTA] append refused",
     });
     assertEquals(s.h.server.folder("Drafts").messages.length, 2);
   } finally {
@@ -560,6 +565,22 @@ Deno.test("cli: save-draft --batch caps each body at maxDraftBytes, counted in U
         `batch line 1: body exceeds ${limit} bytes`,
       );
     }
+    assertEquals(s.h.server.commandLog, []);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --batch refuses a file over 4 MiB before reading or connecting", async () => {
+  const s = await setup();
+  try {
+    const file = `${s.ctx.config.scratchDir}/huge.jsonl`;
+    const out = await invoke(s.ctx, {
+      argv: ["save-draft", "--batch", file],
+      files: { [file]: new Uint8Array(4 * 1024 * 1024 + 1).fill(0x0a) },
+    });
+    assertEquals(out.code, 1);
+    assertEquals(out.doc.error, { code: "too_large", message: "batch file exceeds 4194304 bytes" });
     assertEquals(s.h.server.commandLog, []);
   } finally {
     await s.done();
