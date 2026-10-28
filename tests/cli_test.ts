@@ -2,6 +2,7 @@ import { assert, assertEquals, assertRejects } from "@std/assert";
 import { readCapped, run } from "../src/cli.ts";
 import { OpError } from "../src/session.ts";
 import { FakeSecrets, makeCtx, type TestCtx } from "./support/ctx.ts";
+import type { FakeServerOptions } from "./support/fake_imap.ts";
 import {
   draftParts,
   type Harness,
@@ -34,8 +35,8 @@ interface Outcome {
 interface Invoke {
   argv: string[];
   stdin?: Uint8Array;
-  /** Contents served by readFile, keyed by path. */
-  files?: Record<string, string>;
+  /** Contents served by readFile, keyed by path. Strings are UTF-8 encoded; bytes are served as-is. */
+  files?: Record<string, string | Uint8Array>;
   readStdin?: (maxBytes: number) => Promise<Uint8Array>;
   secrets?: { getPassword(account: string): Promise<string> };
 }
@@ -48,7 +49,8 @@ async function invoke(ctx: TestCtx, inv: Invoke): Promise<Outcome> {
     readStdin: inv.readStdin ?? (() => Promise.resolve(inv.stdin ?? new Uint8Array(0))),
     readFile: (path) => {
       const f = inv.files?.[path];
-      return f === undefined ? Promise.reject(new Deno.errors.NotFound()) : Promise.resolve(enc.encode(f));
+      if (f === undefined) return Promise.reject(new Deno.errors.NotFound());
+      return Promise.resolve(typeof f === "string" ? enc.encode(f) : f);
     },
     write: (json) => writes.push(json),
   });
@@ -65,8 +67,11 @@ function assertUsageFailure(out: Outcome) {
 }
 
 /** Starts the fake server with the standard folders and a fresh ctx; `inbox` seeds INBOX. */
-async function setup(inbox: Array<{ raw: string }> = [{ raw: MSG1 }, { raw: MSG2 }]) {
-  const h: Harness = await startHarness(standardFolders(inbox));
+async function setup(
+  inbox: Array<{ raw: string }> = [{ raw: MSG1 }, { raw: MSG2 }],
+  extra: Partial<FakeServerOptions> = {},
+) {
+  const h: Harness = await startHarness(standardFolders(inbox), extra);
   const ctx = await makeCtx(h);
   return {
     h,
@@ -469,6 +474,92 @@ Deno.test("cli: save-draft --batch only accepts files inside the scratch directo
     assertUsageFailure(
       await invoke(s.ctx, { argv: ["save-draft", "--batch", `${dir}/b.jsonl`, "--to", "a@example.com"] }),
     );
+    assertEquals(s.h.server.commandLog, []);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --batch reports partial progress when an APPEND fails midway", async () => {
+  const s = await setup(undefined, { failAppendAfter: 2 });
+  try {
+    const file = `${s.ctx.config.scratchDir}/partial.jsonl`;
+    const out = await invoke(s.ctx, {
+      argv: ["save-draft", "--batch", file],
+      files: { [file]: batchLines(4) },
+    });
+    assertEquals(out.code, 1);
+    assertEquals(out.doc.ok, false);
+    assertEquals(out.doc.error, {
+      code: "imap",
+      message: "saved 2 of 4 drafts; stopped at draft 3: append failed",
+    });
+    assertEquals(s.h.server.folder("Drafts").messages.length, 2);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("readCapped: names the source in the too_large message", async () => {
+  const err = await assertRejects(
+    () => readCapped(streamOf([new Uint8Array([1, 2, 3])]), 2, "batch file"),
+    OpError,
+  );
+  assertEquals(err.code, "too_large");
+  assertEquals(err.message, "batch file exceeds 2 bytes");
+  const stdinErr = await assertRejects(
+    () => readCapped(streamOf([new Uint8Array([1, 2, 3])]), 2),
+    OpError,
+  );
+  assertEquals(stdinErr.message, "stdin exceeds 2 bytes");
+});
+
+Deno.test("cli: save-draft --batch with a missing file is a usage error", async () => {
+  const s = await setup();
+  try {
+    const out = await invoke(s.ctx, {
+      argv: ["save-draft", "--batch", `${s.ctx.config.scratchDir}/missing.jsonl`],
+    });
+    assertUsageFailure(out);
+    assertEquals((out.doc.error as { message: string }).message, "cannot read batch file");
+    assertEquals(s.h.server.commandLog, []);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --batch rejects a file that is not valid UTF-8", async () => {
+  const s = await setup();
+  try {
+    const file = `${s.ctx.config.scratchDir}/latin1.jsonl`;
+    const bytes = new Uint8Array([...enc.encode(batchLines(1)), 0xff, 0xfe, 0x0a]);
+    const out = await invoke(s.ctx, { argv: ["save-draft", "--batch", file], files: { [file]: bytes } });
+    assertUsageFailure(out);
+    assertEquals((out.doc.error as { message: string }).message, "batch file must be valid UTF-8");
+    assertEquals(s.h.server.commandLog, []);
+  } finally {
+    await s.done();
+  }
+});
+
+Deno.test("cli: save-draft --batch caps each body at maxDraftBytes, counted in UTF-8 bytes", async () => {
+  const s = await setup();
+  try {
+    const limit = s.ctx.config.limits.maxDraftBytes;
+    const file = `${s.ctx.config.scratchDir}/big.jsonl`;
+    const cases = [
+      "x".repeat(limit + 1), // one byte per character, over by one
+      "é".repeat(Math.floor(limit / 2) + 1), // two bytes per character: under in chars, over in bytes
+    ];
+    for (const body of cases) {
+      const line = JSON.stringify({ to: "p@example.com", subject: "Big", body });
+      const out = await invoke(s.ctx, { argv: ["save-draft", "--batch", file], files: { [file]: line } });
+      assertUsageFailure(out);
+      assertEquals(
+        (out.doc.error as { message: string }).message,
+        `batch line 1: body exceeds ${limit} bytes`,
+      );
+    }
     assertEquals(s.h.server.commandLog, []);
   } finally {
     await s.done();

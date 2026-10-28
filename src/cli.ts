@@ -41,7 +41,7 @@ function decodeUtf8(bytes: Uint8Array, what: string): string {
   }
 }
 
-/** Batch files must sit directly under the scratch directory, the only place the binary may read. */
+/** Batch files must sit inside the scratch directory (nested subpaths are allowed), the only place the binary may read. */
 function checkBatchPath(path: string, scratchDir: string): void {
   const rel = path.startsWith(scratchDir + "/") ? path.slice(scratchDir.length + 1) : null;
   if (rel === null || rel.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) {
@@ -67,12 +67,16 @@ function parseArgs(args: string[], flags: string[]): { pos: string[]; flags: Map
   return { pos, flags: out };
 }
 
-export async function readCapped(stream: ReadableStream<Uint8Array>, maxBytes: number): Promise<Uint8Array> {
+export async function readCapped(
+  stream: ReadableStream<Uint8Array>,
+  maxBytes: number,
+  what = "stdin",
+): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   let total = 0;
   for await (const c of stream) {
     total += c.length;
-    if (total > maxBytes) throw new OpError("too_large", `stdin exceeds ${maxBytes} bytes`);
+    if (total > maxBytes) throw new OpError("too_large", `${what} exceeds ${maxBytes} bytes`);
     chunks.push(c);
   }
   const out = new Uint8Array(total);
@@ -145,9 +149,15 @@ export async function run(argv: string[], config: BrokerConfig, deps: CliDeps): 
         if (batch !== undefined) {
           if (f.size !== 1) throw new OpError("usage", "--batch cannot be combined with other flags");
           checkBatchPath(batch, config.scratchDir);
-          const specs = parseBatch(
-            decodeUtf8(await deps.readFile(batch, MAX_BATCH_FILE_BYTES), "batch file"),
-          );
+          let bytes: Uint8Array;
+          try {
+            bytes = await deps.readFile(batch, MAX_BATCH_FILE_BYTES);
+          } catch (e) {
+            // Missing or unreadable file is a usage error; OpErrors (e.g. too_large) keep their code.
+            if (e instanceof OpError) throw e;
+            throw new OpError("usage", "cannot read batch file");
+          }
+          const specs = parseBatch(decodeUtf8(bytes, "batch file"), config.limits.maxDraftBytes);
           const s = await openSession(config, deps.secrets);
           try {
             result = await saveNewDrafts(s, specs);

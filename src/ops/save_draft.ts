@@ -3,6 +3,7 @@ import { buildDraft, validAddress } from "../mime_out.ts";
 import { OpError, type Session } from "../session.ts";
 
 const MAX_REFERENCES = 10;
+const enc = new TextEncoder();
 
 /** Cheap checks the CLI runs before opening a connection. */
 export function validateDraftBody(body: string): void {
@@ -54,7 +55,7 @@ const MAX_SUBJECT_CHARS = 300;
 
 /** Cheap checks for a new-message draft; the CLI runs them before opening a connection. */
 export function validateNewDraft(to: string, subject: string, body: string): void {
-  if (!validAddress(to)) throw new OpError("usage", "invalid --to address");
+  if (!validAddress(to)) throw new OpError("usage", "invalid recipient address");
   if (
     !subject.trim() || subject.length > MAX_SUBJECT_CHARS ||
     /\p{Cc}/u.test(subject.replace(/\t/g, " "))
@@ -84,8 +85,11 @@ export interface NewDraftSpec {
 
 const MAX_BATCH = 100;
 
-/** Parses JSON lines of {to, subject, body}. Every line is validated before anything is saved. */
-export function parseBatch(text: string): NewDraftSpec[] {
+/**
+ * Parses JSON lines of {to, subject, body}. Every line is validated before anything is saved.
+ * Each body must be at most maxBodyBytes of UTF-8, the same limit as a body read from stdin.
+ */
+export function parseBatch(text: string, maxBodyBytes: number): NewDraftSpec[] {
   const specs: NewDraftSpec[] = [];
   const lines = text.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
@@ -108,6 +112,9 @@ export function parseBatch(text: string): NewDraftSpec[] {
       validateNewDraft(r.to, r.subject, r.body);
     } catch (e) {
       throw new OpError("usage", `${at}: ${(e as Error).message}`);
+    }
+    if (enc.encode(r.body).length > maxBodyBytes) {
+      throw new OpError("usage", `${at}: body exceeds ${maxBodyBytes} bytes`);
     }
     if (specs.length === MAX_BATCH) throw new OpError("usage", `batch exceeds ${MAX_BATCH} drafts`);
     specs.push({ to: r.to, subject: r.subject, body: r.body });
