@@ -32,6 +32,8 @@ export interface FakeServerOptions {
   /** Send a second, unsolicited continuation request after the first one for a literal. */
   extraContinuation?: boolean;
   examineStyle?: "untagged" | "tagged-only" | "no-uidnext";
+  /** Answer NO to every APPEND after this many successful ones. Default: never fail. */
+  failAppendAfter?: number;
 }
 
 type Tok = string | Tok[];
@@ -64,6 +66,7 @@ export class FakeImapServer {
   private done: Promise<void>;
   private closed = false;
   private conns = new Set<Deno.Conn>();
+  private appendsOk = 0;
 
   constructor(private opts: FakeServerOptions) {
     this.folders = opts.folders;
@@ -336,6 +339,11 @@ export class FakeImapServer {
                 await no("[TRYCREATE] no such folder");
                 break;
               }
+              if (this.opts.failAppendAfter !== undefined && this.appendsOk >= this.opts.failAppendAfter) {
+                await no("[OVERQUOTA] append refused");
+                break;
+              }
+              this.appendsOk++;
               const flagsTok = args.find((a, i) => i > 0 && Array.isArray(a)) as string[] | undefined;
               const body = args[args.length - 1] as string;
               const uid = f.nextUid++;

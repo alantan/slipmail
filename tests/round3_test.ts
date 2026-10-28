@@ -91,6 +91,7 @@ Deno.test("round3 cli: out-of-range or zero --uidvalidity is a usage error witho
       const code = await run(["handled-check", "1", "--uidvalidity", uv], ctx.config, {
         secrets: new FakeSecrets(PASSWORD),
         readStdin: () => Promise.resolve(new Uint8Array()),
+        readFile: () => Promise.reject(new Error("no files")),
         write: (j) => out.push(j),
       });
       assertEquals(code, 2, uv);
@@ -112,6 +113,7 @@ Deno.test("round3 cli: invalid draft bodies are rejected before connecting", asy
       const code = await run(["save-draft", "--reply-to", "1"], ctx.config, {
         secrets: new FakeSecrets(PASSWORD),
         readStdin: () => Promise.resolve(new TextEncoder().encode(body)),
+        readFile: () => Promise.reject(new Error("no files")),
         write: (j) => out.push(j),
       });
       assertEquals(code, 2);

@@ -244,6 +244,7 @@ async function runCli(config: BrokerConfig, argv: string[], secrets: SecretStore
   const code = await run(argv, config, {
     secrets,
     readStdin: () => Promise.resolve(new Uint8Array(0)),
+    readFile: () => Promise.reject(new Error("no files")),
     write: (json) => writes.push(json),
   });
   assertEquals(writes.length, 1, `expected one JSON document, got ${writes.length}`);
