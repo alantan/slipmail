@@ -183,7 +183,7 @@ Deno.test("cli: save-draft appends a threaded reply to Drafts", async () => {
     const raw = drafts[0].raw;
     const parts = draftParts(raw);
     assertEquals(parts["text/plain"], "Thanks!");
-    assertEquals(parts["text/html"].includes("<p "), true);
+    assertEquals(parts["text/html"].includes("<div>"), true);
     assert(raw.includes("In-Reply-To: <a1@example.com>"));
   } finally {
     await s.done();
