@@ -6,18 +6,25 @@ import { OpError, type Session } from "../src/session.ts";
 import { makeCtx } from "./support/ctx.ts";
 import { draftParts, type Harness, rfc822, standardFolders, startHarness } from "./support/harness.ts";
 
-const P = 'style="margin:0 0 1em 0"';
-const Q = 'style="margin:0 0 1em 0;padding-left:1em;border-left:2px solid #ccc"';
+const Q = 'style="margin:0;padding-left:1em;border-left:2px solid #ccc"';
+const SP = "<div><br></div>";
 const wrap = (inner: string) =>
   `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${inner}</body></html>`;
 
 // ---------------------------------------------------------------- converter
 
-Deno.test("html: blank-line separated blocks become paragraphs, single newlines become <br>", () => {
+Deno.test("html: blank-line separated blocks become divs with spacers between, single newlines become <br>", () => {
   assertEquals(
     textToHtml("Hi Alice,\n\nLine one\nLine two\n\n\n\nBye\n"),
-    wrap(`<p ${P}>Hi Alice,</p><p ${P}>Line one<br>Line two</p><p ${P}>Bye</p>`),
+    wrap(`<div>Hi Alice,</div>${SP}<div>Line one<br>Line two</div>${SP}<div>Bye</div>`),
   );
+});
+
+Deno.test("html: a single block has no spacer and no paragraph tags", () => {
+  const html = textToHtml("Only one");
+  assertEquals(html, wrap("<div>Only one</div>"));
+  const tagNames = (html.match(/<[a-z]+/gi) ?? []).map((t) => t.toLowerCase());
+  assert(!tagNames.some((t) => t.slice(1) === "p"), "no paragraph tags");
 });
 
 Deno.test("html: CRLF and CR line endings behave like LF", () => {
@@ -27,30 +34,30 @@ Deno.test("html: CRLF and CR line endings behave like LF", () => {
 Deno.test("html: a signature block keeps its lines together", () => {
   assertEquals(
     textToHtml("Thanks\n\n-- \nAlan\nExample Co"),
-    wrap(`<p ${P}>Thanks</p><p ${P}>-- <br>Alan<br>Example Co</p>`),
+    wrap(`<div>Thanks</div>${SP}<div>-- <br>Alan<br>Example Co</div>`),
   );
 });
 
 Deno.test("html: leading spaces become &nbsp; and later spaces are untouched", () => {
-  assertEquals(textToHtml("  a  b"), wrap(`<p ${P}>&nbsp;&nbsp;a  b</p>`));
-  assertEquals(textToHtml("x\n   y"), wrap(`<p ${P}>x<br>&nbsp;&nbsp;&nbsp;y</p>`));
+  assertEquals(textToHtml("  a  b"), wrap(`<div>&nbsp;&nbsp;a  b</div>`));
+  assertEquals(textToHtml("x\n   y"), wrap(`<div>x<br>&nbsp;&nbsp;&nbsp;y</div>`));
 });
 
 Deno.test("html: a quote block drops its > prefixes and recurses for deeper levels", () => {
   assertEquals(
     textToHtml("> one\n> two"),
-    wrap(`<blockquote ${Q}><p ${P}>one<br>two</p></blockquote>`),
+    wrap(`<blockquote ${Q}><div>one<br>two</div></blockquote>`),
   );
   assertEquals(
     textToHtml("> outer\n>\n> > inner\n> > more\n>\n> back"),
     wrap(
-      `<blockquote ${Q}><p ${P}>outer</p><blockquote ${Q}><p ${P}>inner<br>more</p></blockquote>` +
-        `<p ${P}>back</p></blockquote>`,
+      `<blockquote ${Q}><div>outer</div>${SP}<blockquote ${Q}><div>inner<br>more</div></blockquote>` +
+        `${SP}<div>back</div></blockquote>`,
     ),
   );
   assertEquals(
     textToHtml(">> deep"),
-    wrap(`<blockquote ${Q}><blockquote ${Q}><p ${P}>deep</p></blockquote></blockquote>`),
+    wrap(`<blockquote ${Q}><blockquote ${Q}><div>deep</div></blockquote></blockquote>`),
   );
 });
 
@@ -61,8 +68,9 @@ Deno.test("html: pathological quote nesting is bounded and does not overflow the
   assertEquals(html.match(/<blockquote /g)!.length, html.match(/<\/blockquote>/g)!.length);
 });
 
-Deno.test("html: a bare quote marker produces no empty blockquote", () => {
-  assertEquals(textToHtml(">\n\nhi"), wrap(`<p ${P}>hi</p>`));
+Deno.test("html: a bare quote marker produces no empty blockquote and no stray spacer", () => {
+  assertEquals(textToHtml(">\n\nhi"), wrap(`<div>hi</div>`));
+  assertEquals(textToHtml("hi\n\n>\n\nthere"), wrap(`<div>hi</div>${SP}<div>there</div>`));
   assertEquals(textToHtml("> \n>"), wrap(""));
 });
 
@@ -71,34 +79,34 @@ Deno.test("html: a bare quote marker produces no empty blockquote", () => {
 const S = (t: string) => `<strong>${t}</strong>`;
 
 Deno.test("bold: **x** pairs on one line become <strong>, in place", () => {
-  assertEquals(textToHtml("**Alan Tanaman**"), wrap(`<p ${P}>${S("Alan Tanaman")}</p>`));
-  assertEquals(textToHtml("a **b** c **d** e"), wrap(`<p ${P}>a ${S("b")} c ${S("d")} e</p>`));
-  assertEquals(textToHtml("**Alan**\nExample Co"), wrap(`<p ${P}>${S("Alan")}<br>Example Co</p>`));
-  assertEquals(textToHtml("  **x**"), wrap(`<p ${P}>&nbsp;&nbsp;${S("x")}</p>`));
+  assertEquals(textToHtml("**Alan Tanaman**"), wrap(`<div>${S("Alan Tanaman")}</div>`));
+  assertEquals(textToHtml("a **b** c **d** e"), wrap(`<div>a ${S("b")} c ${S("d")} e</div>`));
+  assertEquals(textToHtml("**Alan**\nExample Co"), wrap(`<div>${S("Alan")}<br>Example Co</div>`));
+  assertEquals(textToHtml("  **x**"), wrap(`<div>&nbsp;&nbsp;${S("x")}</div>`));
 });
 
 Deno.test("bold: works inside quoted lines", () => {
   assertEquals(
     textToHtml("> **Quoted** name"),
-    wrap(`<blockquote ${Q}><p ${P}>${S("Quoted")} name</p></blockquote>`),
+    wrap(`<blockquote ${Q}><div>${S("Quoted")} name</div></blockquote>`),
   );
   assertEquals(
     textToHtml(">> **deep**"),
-    wrap(`<blockquote ${Q}><blockquote ${Q}><p ${P}>${S("deep")}</p></blockquote></blockquote>`),
+    wrap(`<blockquote ${Q}><blockquote ${Q}><div>${S("deep")}</div></blockquote></blockquote>`),
   );
 });
 
 Deno.test("bold: unmatched, empty and line-spanning markers stay literal", () => {
-  assertEquals(textToHtml("a ** b"), wrap(`<p ${P}>a ** b</p>`));
-  assertEquals(textToHtml("****"), wrap(`<p ${P}>****</p>`));
-  assertEquals(textToHtml("a **b\nc** d"), wrap(`<p ${P}>a **b<br>c** d</p>`));
-  assertEquals(textToHtml("**a**b**c"), wrap(`<p ${P}>${S("a")}b**c</p>`));
+  assertEquals(textToHtml("a ** b"), wrap(`<div>a ** b</div>`));
+  assertEquals(textToHtml("****"), wrap(`<div>****</div>`));
+  assertEquals(textToHtml("a **b\nc** d"), wrap(`<div>a **b<br>c** d</div>`));
+  assertEquals(textToHtml("**a**b**c"), wrap(`<div>${S("a")}b**c</div>`));
 });
 
 Deno.test("bold: no nesting and no other markup", () => {
-  assertEquals(textToHtml("**a *b* c**"), wrap(`<p ${P}>${S("a *b* c")}</p>`));
-  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<p ${P}>*i* _i_ [l](http://x)</p>`));
-  assertEquals(textToHtml("**a **b** c**"), wrap(`<p ${P}>${S("a ")}b${S(" c")}</p>`));
+  assertEquals(textToHtml("**a *b* c**"), wrap(`<div>${S("a *b* c")}</div>`));
+  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<div>*i* _i_ [l](http://x)</div>`));
+  assertEquals(textToHtml("**a **b** c**"), wrap(`<div>${S("a ")}b${S(" c")}</div>`));
 });
 
 Deno.test("bold: bold text cannot smuggle tags or attributes", () => {
@@ -123,8 +131,9 @@ Deno.test("bold: bold text cannot smuggle tags or attributes", () => {
           "<body",
           "</body",
           "</html",
-          "<p",
-          "</p",
+          "<div",
+          "</div",
+          "<br",
           "<strong",
           "</strong",
         ]
@@ -134,9 +143,9 @@ Deno.test("bold: bold text cannot smuggle tags or attributes", () => {
     }
     assert(!/<script|<img|<b /i.test(html), t);
   }
-  assertEquals(textToHtml("**<b onclick=x>**"), wrap(`<p ${P}>${S("&lt;b onclick=x&gt;")}</p>`));
-  assertEquals(textToHtml("**a**<script>"), wrap(`<p ${P}>${S("a")}&lt;script&gt;</p>`));
-  assertEquals(textToHtml("**&lt;b&gt;**"), wrap(`<p ${P}>${S("&amp;lt;b&amp;gt;")}</p>`));
+  assertEquals(textToHtml("**<b onclick=x>**"), wrap(`<div>${S("&lt;b onclick=x&gt;")}</div>`));
+  assertEquals(textToHtml("**a**<script>"), wrap(`<div>${S("a")}&lt;script&gt;</div>`));
+  assertEquals(textToHtml("**&lt;b&gt;**"), wrap(`<div>${S("&amp;lt;b&amp;gt;")}</div>`));
 });
 
 Deno.test("bold: stripBold removes markers exactly where the HTML makes bold", () => {
@@ -165,15 +174,15 @@ Deno.test("bold: very long runs and many pairs stay linear", () => {
   assertEquals(textToHtml("**a** ".repeat(10_000)).match(/<strong>/g)!.length, 10_000);
 });
 
-Deno.test("html: a block that mixes quoted and unquoted lines is an escaped paragraph", () => {
-  assertEquals(textToHtml("On Monday, A wrote:\n> hi"), wrap(`<p ${P}>On Monday, A wrote:<br>&gt; hi</p>`));
+Deno.test("html: a block that mixes quoted and unquoted lines is an escaped block", () => {
+  assertEquals(textToHtml("On Monday, A wrote:\n> hi"), wrap(`<div>On Monday, A wrote:<br>&gt; hi</div>`));
 });
 
 Deno.test("html: & < > \" ' are all escaped", () => {
   assertEquals(escapeHtml(`&<>"'`), "&amp;&lt;&gt;&quot;&#39;");
   assertEquals(
     textToHtml(`a & b <c> "d" 'e'`),
-    wrap(`<p ${P}>a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39;</p>`),
+    wrap(`<div>a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#39;</div>`),
   );
 });
 
@@ -199,8 +208,8 @@ Deno.test("html: hostile text is only ever emitted as escaped text", () => {
     "<body",
     "</body",
     "</html",
-    "<p",
-    "</p",
+    "<div",
+    "</div",
     "<br",
     "<blockquote",
     "</blockquote",

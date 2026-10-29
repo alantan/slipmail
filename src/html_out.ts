@@ -7,8 +7,9 @@ export function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ESC[c]);
 }
 
-const P_STYLE = "margin:0 0 1em 0";
-const QUOTE_STYLE = "margin:0 0 1em 0;padding-left:1em;border-left:2px solid #ccc";
+// Blank line between blocks, as mail clients emit it.
+const SPACER = "<div><br></div>";
+const QUOTE_STYLE = "margin:0;padding-left:1em;border-left:2px solid #ccc";
 
 /**
  * Splits one line on `**` pairs. Each pair around non-empty text is a bold segment, matched left to right
@@ -66,14 +67,15 @@ function renderBlocks(lines: string[], depth = 0): string {
   }
   if (cur.length) blocks.push(cur);
 
+  // Empty rendered blocks (a bare quote marker) are dropped so no stray spacer is emitted.
   return blocks.map((block) => {
     if (depth < MAX_QUOTE_DEPTH && block.every((l) => l.startsWith(">"))) {
       // Drop one ">" and one optional space per line, then handle the inner text the same way.
       const inner = renderBlocks(block.map((l) => l.slice(1).replace(/^ /, "")), depth + 1);
       return inner && `<blockquote style="${QUOTE_STYLE}">${inner}</blockquote>`;
     }
-    return `<p style="${P_STYLE}">${block.map(renderLine).join("<br>")}</p>`;
-  }).join("");
+    return `<div>${block.map(renderLine).join("<br>")}</div>`;
+  }).filter((html) => html !== "").join(SPACER);
 }
 
 export function textToHtml(text: string): string {
