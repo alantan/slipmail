@@ -14,8 +14,8 @@ const QUOTE_STYLE = "margin:0;padding-left:1em;border-left:2px solid #ccc";
 type Segment = { text: string; bold: boolean; italic: boolean };
 
 // `*x*` italic: the opening `*` must precede a non-space and the closing `*` must follow one, so a stray
-// "5 * 3 * 2" stays literal. Content has no `*`, so pairs cannot nest or overlap. Linear time.
-const ITALIC = /\*(?=\S)([^*]*[^*\s])\*/g;
+// "5 * 3 * 2" stays literal. Neither may touch another `*`, so leftovers of an unmatched `**` stay literal. Content has no `*`, so pairs cannot nest or overlap. Linear time.
+const ITALIC = /(?<!\*)\*(?=\S)([^*]*[^*\s])\*(?!\*)/g;
 
 /**
  * Splits one line on `**` pairs. Each pair around non-empty text is a bold segment, matched left to right
@@ -62,7 +62,7 @@ function segments(line: string): Segment[] {
 }
 
 /** The line as the plain-text part shows it: bold and italic markers removed. */
-export function stripBold(line: string): string {
+export function stripMarkup(line: string): string {
   return segments(line).map((s) => s.text).join("");
 }
 
