@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { escapeHtml, stripBold, textToHtml } from "../src/html_out.ts";
+import { escapeHtml, stripMarkup, textToHtml } from "../src/html_out.ts";
 import { buildDraft } from "../src/mime_out.ts";
 import { saveDraft } from "../src/ops/save_draft.ts";
 import { OpError, type Session } from "../src/session.ts";
@@ -105,7 +105,7 @@ Deno.test("bold: unmatched, empty and line-spanning markers stay literal", () =>
 
 Deno.test("bold: no nesting and no other markup", () => {
   assertEquals(textToHtml("**a *b* c**"), wrap(`<div>${S("a *b* c")}</div>`));
-  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<div>*i* _i_ [l](http://x)</div>`));
+  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<div><em>i</em> _i_ [l](http://x)</div>`));
   assertEquals(textToHtml("**a **b** c**"), wrap(`<div>${S("a ")}b${S(" c")}</div>`));
 });
 
@@ -148,15 +148,60 @@ Deno.test("bold: bold text cannot smuggle tags or attributes", () => {
   assertEquals(textToHtml("**&lt;b&gt;**"), wrap(`<div>${S("&amp;lt;b&amp;gt;")}</div>`));
 });
 
-Deno.test("bold: stripBold removes markers exactly where the HTML makes bold", () => {
-  assertEquals(stripBold("**Alan Tanaman**"), "Alan Tanaman");
-  assertEquals(stripBold("a **b** c"), "a b c");
-  assertEquals(stripBold("a ** d"), "a ** d");
-  assertEquals(stripBold("****"), "****");
-  assertEquals(stripBold("> **q**"), "> q");
+Deno.test("bold: stripMarkup removes markers exactly where the HTML makes bold", () => {
+  assertEquals(stripMarkup("**Alan Tanaman**"), "Alan Tanaman");
+  assertEquals(stripMarkup("a **b** c"), "a b c");
+  assertEquals(stripMarkup("a ** d"), "a ** d");
+  assertEquals(stripMarkup("****"), "****");
+  assertEquals(stripMarkup("> **q**"), "> q");
 });
 
-Deno.test("bold: very long runs and many pairs stay linear", () => {
+Deno.test("italic: *x* becomes <em>, markers removed from the plain part, stray asterisks stay literal", () => {
+  assertEquals(
+    textToHtml("Founder — *Every slip & boat*"),
+    wrap("<div>Founder — <em>Every slip &amp; boat</em></div>"),
+  );
+  assertEquals(textToHtml("**a** and *b*"), wrap("<div><strong>a</strong> and <em>b</em></div>"));
+  assertEquals(textToHtml("*<b>*"), wrap("<div><em>&lt;b&gt;</em></div>"));
+  assertEquals(stripMarkup("a *b* c"), "a b c");
+  // Stray or leftover asterisks stay exactly as typed, in both parts.
+  for (
+    const lit of ["5 * 3 * 2", "a * b", "*", "**", "* a*", "*a *", "**a", "**a*b", "**a*", "*a**", "a**b*"]
+  ) {
+    assertEquals(stripMarkup(lit), lit, lit);
+    assertEquals(textToHtml(lit), wrap(`<div>${lit}</div>`), lit);
+  }
+  assertEquals(textToHtml("5 * 3 * 2"), wrap("<div>5 * 3 * 2</div>"));
+  assertEquals(
+    textToHtml("> *q*"),
+    wrap(
+      '<blockquote style="margin:0;padding-left:1em;border-left:2px solid #ccc"><div><em>q</em></div></blockquote>',
+    ),
+  );
+});
+
+Deno.test("italic: multiple spans, indentation, no line-spanning, no combining with bold", () => {
+  assertEquals(textToHtml("a *b* c *d* e"), wrap("<div>a <em>b</em> c <em>d</em> e</div>"));
+  assertEquals(stripMarkup("a *b* c *d* e"), "a b c d e");
+  assertEquals(textToHtml("  *x*"), wrap("<div>&nbsp;&nbsp;<em>x</em></div>"));
+  assertEquals(stripMarkup("  *x*"), "  x");
+  assertEquals(textToHtml("a *b\nc* d"), wrap("<div>a *b<br>c* d</div>"));
+  assertEquals(stripMarkup("a *b"), "a *b");
+  assertEquals(textToHtml("*a **b** c*"), wrap(`<div>*a ${S("b")} c*</div>`));
+  assertEquals(stripMarkup("*a **b** c*"), "*a b c*");
+});
+
+Deno.test("italic: italic text cannot smuggle tags or attributes", () => {
+  assertEquals(textToHtml("*<b onclick=x>*"), wrap("<div><em>&lt;b onclick=x&gt;</em></div>"));
+  assertEquals(textToHtml("*a*<script>"), wrap("<div><em>a</em>&lt;script&gt;</div>"));
+  assertEquals(textToHtml("*&lt;b&gt;*"), wrap("<div><em>&amp;lt;b&amp;gt;</em></div>"));
+  assertEquals(
+    textToHtml('*"><img src=x onerror=y>*'),
+    wrap("<div><em>&quot;&gt;&lt;img src=x onerror=y&gt;</em></div>"),
+  );
+});
+
+Deno.test("markup: very long runs and many bold or italic pairs stay linear", () => {
   const cases = [
     "**" + "a".repeat(500_000) + "**",
     "**a** ".repeat(10_000),
@@ -164,11 +209,13 @@ Deno.test("bold: very long runs and many pairs stay linear", () => {
     "**a".repeat(100_000), // never closed
     "*".repeat(200_000),
     "**a*".repeat(50_000),
+    "*a ".repeat(100_000),
+    "*" + " ".repeat(500_000),
   ];
   for (const c of cases) {
     const t0 = performance.now();
     textToHtml(c);
-    stripBold(c);
+    stripMarkup(c);
     assert(performance.now() - t0 < 1000, `slow on input of length ${c.length}`);
   }
   assertEquals(textToHtml("**a** ".repeat(10_000)).match(/<strong>/g)!.length, 10_000);
@@ -278,6 +325,14 @@ Deno.test("draft: the plain part has the ** markers removed, the HTML part has <
   assert(parts["text/html"].includes("keep ** this"));
   assert(parts["text/html"].includes("<strong>q</strong>"));
   assert(!parts["text/html"].includes("**Alan"));
+});
+
+Deno.test("draft: the plain part has the * markers removed, the HTML part has <em>", () => {
+  const parts = draftParts(build("Founder — *Every slip*\n\n5 * 3 * 2\n> *q*"));
+  assertEquals(parts["text/plain"], "Founder — Every slip\r\n\r\n5 * 3 * 2\r\n> q");
+  assert(parts["text/html"].includes("Founder — <em>Every slip</em>"));
+  assert(parts["text/html"].includes("5 * 3 * 2"));
+  assert(parts["text/html"].includes("<em>q</em>"));
 });
 
 Deno.test("draft: each build uses a fresh boundary", () => {

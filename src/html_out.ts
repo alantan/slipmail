@@ -11,6 +11,12 @@ export function escapeHtml(s: string): string {
 const SPACER = "<div><br></div>";
 const QUOTE_STYLE = "margin:0;padding-left:1em;border-left:2px solid #ccc";
 
+type Segment = { text: string; bold: boolean; italic: boolean };
+
+// `*x*` italic: the opening `*` must precede a non-space and the closing `*` must follow one, so a stray
+// "5 * 3 * 2" stays literal. Neither may touch another `*`, so leftovers of an unmatched `**` stay literal. Content has no `*`, so pairs cannot nest or overlap. Linear time.
+const ITALIC = /(?<!\*)\*(?=\S)([^*]*[^*\s])\*(?!\*)/g;
+
 /**
  * Splits one line on `**` pairs. Each pair around non-empty text is a bold segment, matched left to right
  * with no nesting. An unmatched `**` and an empty `****` stay literal. Runs in linear time.
@@ -36,18 +42,38 @@ function boldSegments(line: string): Array<{ text: string; bold: boolean }> {
   return out;
 }
 
-/** The line as the plain-text part shows it: bold markers removed. */
-export function stripBold(line: string): string {
-  return boldSegments(line).map((s) => s.text).join("");
+/** Bold segments, with `*italic*` pairs split out of the non-bold text. */
+function segments(line: string): Segment[] {
+  const out: Segment[] = [];
+  for (const seg of boldSegments(line)) {
+    if (seg.bold) {
+      out.push({ ...seg, italic: false });
+      continue;
+    }
+    let last = 0;
+    for (const m of seg.text.matchAll(ITALIC)) {
+      if (m.index > last) out.push({ text: seg.text.slice(last, m.index), bold: false, italic: false });
+      out.push({ text: m[1], bold: false, italic: true });
+      last = m.index + m[0].length;
+    }
+    if (last < seg.text.length) out.push({ text: seg.text.slice(last), bold: false, italic: false });
+  }
+  return out;
 }
 
-/** One line: leading spaces (tabs count as four) become &nbsp;, the rest is escaped, **x** becomes bold. */
+/** The line as the plain-text part shows it: bold and italic markers removed. */
+export function stripMarkup(line: string): string {
+  return segments(line).map((s) => s.text).join("");
+}
+
+/** One line: leading spaces (tabs count as four) become &nbsp;, the rest is escaped, **x** becomes bold, *x* italic. */
 function renderLine(line: string): string {
   const lead = /^[ \t]*/.exec(line)![0];
   const nbsp = lead.replace(/\t/g, "    ").replace(/ /g, "&nbsp;");
-  const rest = boldSegments(line.slice(lead.length)).map((s) =>
-    s.bold ? `<strong>${escapeHtml(s.text)}</strong>` : escapeHtml(s.text)
-  ).join("");
+  const rest = segments(line.slice(lead.length)).map((s) => {
+    const t = escapeHtml(s.text);
+    return s.bold ? `<strong>${t}</strong>` : s.italic ? `<em>${t}</em>` : t;
+  }).join("");
   return nbsp + rest;
 }
 
