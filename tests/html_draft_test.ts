@@ -180,6 +180,17 @@ Deno.test("italic: *x* becomes <em>, markers removed from the plain part, stray 
   );
 });
 
+Deno.test("italic: multiple spans, indentation, no line-spanning, no combining with bold", () => {
+  assertEquals(textToHtml("a *b* c *d* e"), wrap("<div>a <em>b</em> c <em>d</em> e</div>"));
+  assertEquals(stripMarkup("a *b* c *d* e"), "a b c d e");
+  assertEquals(textToHtml("  *x*"), wrap("<div>&nbsp;&nbsp;<em>x</em></div>"));
+  assertEquals(stripMarkup("  *x*"), "  x");
+  assertEquals(textToHtml("a *b\nc* d"), wrap("<div>a *b<br>c* d</div>"));
+  assertEquals(stripMarkup("a *b"), "a *b");
+  assertEquals(textToHtml("*a **b** c*"), wrap(`<div>*a ${S("b")} c*</div>`));
+  assertEquals(stripMarkup("*a **b** c*"), "*a b c*");
+});
+
 Deno.test("italic: italic text cannot smuggle tags or attributes", () => {
   assertEquals(textToHtml("*<b onclick=x>*"), wrap("<div><em>&lt;b onclick=x&gt;</em></div>"));
   assertEquals(textToHtml("*a*<script>"), wrap("<div><em>a</em>&lt;script&gt;</div>"));
@@ -190,7 +201,7 @@ Deno.test("italic: italic text cannot smuggle tags or attributes", () => {
   );
 });
 
-Deno.test("bold: very long runs and many pairs stay linear", () => {
+Deno.test("markup: very long runs and many bold or italic pairs stay linear", () => {
   const cases = [
     "**" + "a".repeat(500_000) + "**",
     "**a** ".repeat(10_000),
