@@ -105,7 +105,7 @@ Deno.test("bold: unmatched, empty and line-spanning markers stay literal", () =>
 
 Deno.test("bold: no nesting and no other markup", () => {
   assertEquals(textToHtml("**a *b* c**"), wrap(`<div>${S("a *b* c")}</div>`));
-  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<div>*i* _i_ [l](http://x)</div>`));
+  assertEquals(textToHtml("*i* _i_ [l](http://x)"), wrap(`<div><em>i</em> _i_ [l](http://x)</div>`));
   assertEquals(textToHtml("**a **b** c**"), wrap(`<div>${S("a ")}b${S(" c")}</div>`));
 });
 
@@ -156,6 +156,26 @@ Deno.test("bold: stripBold removes markers exactly where the HTML makes bold", (
   assertEquals(stripBold("> **q**"), "> q");
 });
 
+Deno.test("italic: *x* becomes <em>, markers removed from the plain part, stray asterisks stay literal", () => {
+  assertEquals(
+    textToHtml("Founder — *Every slip & boat*"),
+    wrap("<div>Founder — <em>Every slip &amp; boat</em></div>"),
+  );
+  assertEquals(textToHtml("**a** and *b*"), wrap("<div><strong>a</strong> and <em>b</em></div>"));
+  assertEquals(textToHtml("*<b>*"), wrap("<div><em>&lt;b&gt;</em></div>"));
+  assertEquals(stripBold("a *b* c"), "a b c");
+  for (const lit of ["5 * 3 * 2", "a * b", "*", "**", "* a*", "*a *", "**a", "**a*b"]) {
+    assertEquals(stripBold(lit).includes("*") || lit === "**a*b", true, lit);
+  }
+  assertEquals(textToHtml("5 * 3 * 2"), wrap("<div>5 * 3 * 2</div>"));
+  assertEquals(
+    textToHtml("> *q*"),
+    wrap(
+      '<blockquote style="margin:0;padding-left:1em;border-left:2px solid #ccc"><div><em>q</em></div></blockquote>',
+    ),
+  );
+});
+
 Deno.test("bold: very long runs and many pairs stay linear", () => {
   const cases = [
     "**" + "a".repeat(500_000) + "**",
@@ -164,6 +184,8 @@ Deno.test("bold: very long runs and many pairs stay linear", () => {
     "**a".repeat(100_000), // never closed
     "*".repeat(200_000),
     "**a*".repeat(50_000),
+    "*a ".repeat(100_000),
+    "*" + " ".repeat(500_000),
   ];
   for (const c of cases) {
     const t0 = performance.now();
